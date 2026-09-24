@@ -199,15 +199,21 @@ app.get('/api/stream/:videoId', async (req, res) => {
 app.get('/api/debug-stream', (req, res) => {
   try {
     const exists = fs.existsSync(ytdlpBinary);
-    let stat = null;
-    if (exists) {
-      stat = fs.statSync(ytdlpBinary);
-    }
-    res.json({
-      ytdlpBinary,
-      exists,
-      stat,
-      dirContents: fs.readdirSync(path.join(__dirname, '..')).filter(f => !f.startsWith('.') && f !== 'node_modules')
+    if (!exists) return res.json({ error: 'Binary does not exist' });
+
+    execFile(ytdlpBinary, ['--version'], { timeout: 5000 }, (err, stdout, stderr) => {
+      if (err) {
+        return res.json({ versionError: err.message, stderr });
+      }
+      execFile(ytdlpBinary, ['-g', '-f', 'ba[ext=m4a]/ba', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'], { timeout: 15000 }, (err2, stdout2, stderr2) => {
+        res.json({
+          version: stdout.trim(),
+          streamSuccess: !err2,
+          streamUrl: stdout2 ? stdout2.trim().substring(0, 60) + '...' : null,
+          streamError: err2 ? err2.message : null,
+          stderr: stderr2
+        });
+      });
     });
   } catch (err) {
     res.json({ error: err.message });
