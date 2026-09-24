@@ -7,19 +7,22 @@ const fileName = isWin ? 'yt-dlp.exe' : 'yt-dlp';
 const targetPath = path.join(__dirname, '..', fileName);
 
 if (fs.existsSync(targetPath)) {
-  console.log(`[install-ytdlp] ${fileName} already exists, skipping download.`);
-  process.exit(0);
+  const stat = fs.statSync(targetPath);
+  // Ensure not empty or corrupted (< 10MB)
+  if (stat.size > 10 * 1024 * 1024) {
+    console.log(`[install-ytdlp] ${fileName} already exists (${(stat.size / 1024 / 1024).toFixed(1)}MB), skipping download.`);
+    process.exit(0);
+  }
 }
 
 const url = isWin
   ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-  : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+  : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
 
 console.log(`[install-ytdlp] Downloading ${fileName} from ${url}...`);
 
 function download(downloadUrl) {
   https.get(downloadUrl, (res) => {
-    // Follow redirect
     if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
       return download(res.headers.location);
     }
