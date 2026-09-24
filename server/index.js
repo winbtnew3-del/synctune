@@ -202,11 +202,11 @@ app.get('/api/debug-stream', (req, res) => {
     if (!exists) return res.json({ error: 'Binary does not exist' });
 
     const { exec } = require('child_process');
-    exec('which python3; which pip; which yt-dlp; ls -la /opt/render/project/src/yt-dlp; /opt/render/project/src/yt-dlp --version', (shErr, shOut, shErrOut) => {
+    exec(`${ytdlpBinary} -g -f "ba[ext=m4a]/ba" --no-warnings --no-playlist "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`, { timeout: 20000 }, (err, stdout, stderr) => {
       res.json({
-        shOut,
-        shErrOut,
-        shErr: shErr ? shErr.message : null
+        err: err ? err.message : null,
+        stdout: stdout ? stdout.trim() : null,
+        stderr: stderr ? stderr.trim() : null
       });
     });
   } catch (err) {
