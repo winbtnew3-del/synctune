@@ -1,12 +1,17 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require('socket.io');
-const ytdl = require('@distube/ytdl-core');
 const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -28,30 +33,88 @@ function generateRoomCode() {
 }
 
 function extractVideoId(url) {
+  if (!url) return null;
+  const trimmed = url.trim();
+
+  // Plain 11-character video ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+
   const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|music\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-    /^([a-zA-Z0-9_-]{11})$/
+    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/|music\.youtube\.com\/watch\?(?:.*&)?v=)([a-zA-Z0-9_-]{11})/,
+    /[?&]v=([a-zA-Z0-9_-]{11})/
   ];
+
   for (const p of patterns) {
-    const m = url.match(p);
-    if (m) return m[1];
+    const m = trimmed.match(p);
+    if (m && m[1]) return m[1];
   }
   return null;
+}
+
+// Fetch video info via YouTube's official oEmbed API (100% reliable, never blocked)
+function fetchOEmbedInfo(videoId) {
+  return new Promise((resolve) => {
+    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+    
+    const req = https.get(oembedUrl, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          try {
+            const parsed = JSON.parse(data);
+            return resolve({
+              videoId,
+              title: parsed.title || 'YouTube Track',
+              artist: parsed.author_name || 'YouTube',
+              thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+              duration: 0
+            });
+          } catch (e) {
+            // fallback below
+          }
+        }
+        // Fallback for unlisted/private or special videos
+        resolve({
+          videoId,
+          title: `Track (${videoId})`,
+          artist: 'YouTube Audio',
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          duration: 0
+        });
+      });
+    });
+
+    req.on('error', () => {
+      resolve({
+        videoId,
+        title: `Track (${videoId})`,
+        artist: 'YouTube Audio',
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        duration: 0
+      });
+    });
+
+    req.setTimeout(4000, () => {
+      req.destroy();
+      resolve({
+        videoId,
+        title: `Track (${videoId})`,
+        artist: 'YouTube Audio',
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        duration: 0
+      });
+    });
+  });
 }
 
 async function getCachedInfo(videoId) {
   const cached = infoCache.get(videoId);
   if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
 
-  const raw = await ytdl.getInfo(videoId);
-  const data = {
-    videoId: raw.videoDetails.videoId,
-    title: raw.videoDetails.title,
-    artist: raw.videoDetails.author.name,
-    duration: parseInt(raw.videoDetails.lengthSeconds),
-    thumbnail: raw.videoDetails.thumbnails.sort((a, b) => b.width - a.width)[0]?.url || '',
-    formats: raw.formats
-  };
+  const data = await fetchOEmbedInfo(videoId);
   infoCache.set(videoId, { data, ts: Date.now() });
   return data;
 }
@@ -63,88 +126,31 @@ async function getCachedInfo(videoId) {
 // Video info endpoint
 app.get('/api/info/:videoId', async (req, res) => {
   try {
-    const data = await getCachedInfo(req.params.videoId);
-    res.json({
-      videoId: data.videoId,
-      title: data.title,
-      artist: data.artist,
-      duration: data.duration,
-      thumbnail: data.thumbnail
-    });
+    const videoId = extractVideoId(req.params.videoId);
+    if (!videoId) {
+      return res.status(400).json({ error: 'Invalid video ID or URL.' });
+    }
+    const data = await getCachedInfo(videoId);
+    res.json(data);
   } catch (err) {
     console.error('[API] Info error:', err.message);
-    res.status(400).json({ error: 'Could not fetch video info. Check the video ID.' });
-  }
-});
-
-// Audio stream proxy — the "audio server"
-app.get('/api/stream/:videoId', async (req, res) => {
-  try {
-    const raw = await ytdl.getInfo(req.params.videoId);
-    const format = ytdl.chooseFormat(raw.formats, {
-      quality: 'highestaudio',
-      filter: 'audioonly'
+    res.json({
+      videoId: req.params.videoId,
+      title: 'YouTube Track',
+      artist: 'YouTube Audio',
+      thumbnail: `https://i.ytimg.com/vi/${req.params.videoId}/hqdefault.jpg`,
+      duration: 0
     });
-
-    if (!format) {
-      return res.status(400).json({ error: 'No audio format found' });
-    }
-
-    const contentType = format.mimeType ? format.mimeType.split(';')[0] : 'audio/webm';
-    const contentLength = parseInt(format.contentLength) || 0;
-    const rangeHeader = req.headers.range;
-
-    // Range request support for seeking
-    if (rangeHeader && contentLength) {
-      const parts = rangeHeader.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0]);
-      const end = parts[1] ? parseInt(parts[1]) : contentLength - 1;
-      const chunkSize = end - start + 1;
-
-      res.status(206);
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${contentLength}`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Content-Length', chunkSize);
-      res.setHeader('Content-Type', contentType);
-
-      const stream = ytdl.downloadFromInfo(raw, { format, range: { start, end } });
-      stream.on('error', (e) => {
-        console.error('[Stream] Range error:', e.message);
-        if (!res.headersSent) res.status(500).end();
-      });
-      stream.pipe(res);
-      req.on('close', () => stream.destroy());
-    } else {
-      // Full stream
-      res.setHeader('Content-Type', contentType);
-      if (contentLength) {
-        res.setHeader('Content-Length', contentLength);
-        res.setHeader('Accept-Ranges', 'bytes');
-      }
-
-      const stream = ytdl.downloadFromInfo(raw, { format });
-      stream.on('error', (e) => {
-        console.error('[Stream] Error:', e.message);
-        if (!res.headersSent) res.status(500).end();
-      });
-      stream.pipe(res);
-      req.on('close', () => stream.destroy());
-    }
-  } catch (err) {
-    console.error('[API] Stream error:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Could not stream audio' });
-    }
   }
 });
 
-// Parse YouTube URL
+// Parse YouTube URL endpoint
 app.post('/api/parse-url', (req, res) => {
   const videoId = extractVideoId(req.body.url || '');
   if (videoId) {
     res.json({ videoId });
   } else {
-    res.status(400).json({ error: 'Invalid YouTube URL' });
+    res.status(400).json({ error: 'Invalid YouTube link. Please check the URL.' });
   }
 });
 
@@ -153,8 +159,13 @@ app.get('/room', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
 });
 
+// Health check
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', rooms: rooms.size });
+});
+
 // =============================================
-// Socket.IO — Real-time sync
+// Socket.IO — Real-time Room Sync
 // =============================================
 io.on('connection', (socket) => {
   console.log(`[+] Connected: ${socket.id}`);
@@ -166,7 +177,6 @@ io.on('connection', (socket) => {
     const code = (data?.code || '').toUpperCase() || generateRoomCode();
 
     if (rooms.has(code)) {
-      // If the room exists but host disconnected, allow reclaim
       const existing = rooms.get(code);
       if (existing.hostDisconnectTimer) {
         clearTimeout(existing.hostDisconnectTimer);
@@ -212,8 +222,8 @@ io.on('connection', (socket) => {
     if (!room) {
       return callback({ success: false, error: 'Room not found. Check the code and try again.' });
     }
-    if (room.members.size >= 10) {
-      return callback({ success: false, error: 'Room is full (max 10).' });
+    if (room.members.size >= 20) {
+      return callback({ success: false, error: 'Room is full (max 20 listeners).' });
     }
 
     room.members.set(socket.id, { role: 'guest', joinedAt: Date.now() });
@@ -221,7 +231,6 @@ io.on('connection', (socket) => {
     socket.roomCode = code;
     socket.role = 'guest';
 
-    // Calculate current playback time
     let currentTime = room.currentTime;
     if (room.isPlaying) {
       currentTime += (Date.now() - room.lastUpdate) / 1000;
@@ -249,14 +258,14 @@ io.on('connection', (socket) => {
     if (!room || room.hostId !== socket.id) return;
 
     room.currentTrack = trackData;
-    room.isPlaying = false;
+    room.isPlaying = true;
     room.currentTime = 0;
     room.lastUpdate = Date.now();
 
     socket.to(socket.roomCode).emit('track-changed', {
       track: trackData,
       currentTime: 0,
-      isPlaying: false
+      isPlaying: true
     });
     console.log(`[Track] ${trackData.title} in ${socket.roomCode}`);
   });
@@ -295,22 +304,19 @@ io.on('connection', (socket) => {
   // ---------- Sync Request (guest heartbeat) ----------
   socket.on('sync-request', (callback) => {
     const room = rooms.get(socket.roomCode);
-    if (!room) return callback(null);
+    if (!room) return callback && callback(null);
 
     let currentTime = room.currentTime;
     if (room.isPlaying) {
       currentTime += (Date.now() - room.lastUpdate) / 1000;
     }
-    callback({
-      currentTime,
-      isPlaying: room.isPlaying,
-      serverTime: Date.now()
-    });
-  });
-
-  // ---------- Time Sync (latency measurement) ----------
-  socket.on('time-sync', (callback) => {
-    callback({ serverTime: Date.now() });
+    if (callback) {
+      callback({
+        currentTime,
+        isPlaying: room.isPlaying,
+        serverTime: Date.now()
+      });
+    }
   });
 
   // ---------- Reactions ----------
@@ -327,35 +333,31 @@ io.on('connection', (socket) => {
 
   // ---------- Disconnect ----------
   socket.on('disconnect', () => {
-    console.log(`[-] Disconnected: ${socket.id}`);
     if (!socket.roomCode) return;
-
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
     room.members.delete(socket.id);
 
     if (socket.id === room.hostId) {
-      // Grace period — host might be refreshing
       room.hostDisconnectTimer = setTimeout(() => {
-        io.to(socket.roomCode).emit('room-closed', { reason: 'Host has left the room' });
+        io.to(socket.roomCode).emit('room-closed', { reason: 'Host has left the room.' });
         rooms.delete(socket.roomCode);
         console.log(`[Room] Closed: ${socket.roomCode} (host timeout)`);
-      }, 15000);
-      console.log(`[Room] Host disconnected from ${socket.roomCode}, 15s grace period`);
+      }, 20000);
+      console.log(`[Room] Host disconnected from ${socket.roomCode}, 20s grace period`);
     } else {
       io.to(socket.roomCode).emit('member-update', { memberCount: room.members.size });
     }
   });
 });
 
-// Cleanup stale rooms every 30 min
+// Periodic stale rooms cleanup
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
     if (room.members.size === 0 || now - room.createdAt > 24 * 60 * 60 * 1000) {
       rooms.delete(code);
-      console.log(`[Cleanup] Removed: ${code}`);
     }
   }
 }, 30 * 60 * 1000);

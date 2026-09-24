@@ -981,3 +981,63 @@ nav a:hover, .nav-link:hover {
     height: 52px;
   }
 }
+
+/* =============================================
+   YouTube Player & Mobile Sync Overlay
+   ============================================= */
+
+#yt-player-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+#yt-player {
+  width: 100%;
+  height: 100%;
+}
+
+.sync-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 26, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 20px;
+}
+
+.sync-prompt-card {
+  background: var(--bg-card-solid);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  text-align: center;
+  max-width: 360px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.sync-prompt-icon {
+  font-size: 42px;
+  margin-bottom: 12px;
+}
+
+.sync-prompt-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.sync-prompt-card p {
+  color: var(--text-2);
+  font-size: 13px;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
