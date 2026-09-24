@@ -99,7 +99,8 @@ function extractAudioStreamUrl(videoId) {
 
     const args = [
       '-g',
-      '-f', 'ba[ext=m4a]/ba',
+      '-f', 'ba/b',
+      '--extractor-args', 'youtube:player_client=android,web',
       '--get-duration',
       '--no-warnings',
       '--no-playlist',
@@ -202,7 +203,7 @@ app.get('/api/debug-stream', (req, res) => {
     if (!exists) return res.json({ error: 'Binary does not exist' });
 
     const { exec } = require('child_process');
-    exec(`${ytdlpBinary} -g -f "ba[ext=m4a]/ba" --no-warnings --no-playlist "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`, { timeout: 20000 }, (err, stdout, stderr) => {
+    exec(`${ytdlpBinary} -g -f "ba/b" --extractor-args "youtube:player_client=android,web" --no-warnings --no-playlist "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`, { timeout: 20000 }, (err, stdout, stderr) => {
       res.json({
         err: err ? err.message : null,
         stdout: stdout ? stdout.trim() : null,
