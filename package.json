@@ -4,14 +4,13 @@
   "description": "SyncTune - Listen Together in Real-Time",
   "main": "server/index.js",
   "scripts": {
+    "postinstall": "node scripts/install-ytdlp.js",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
     "cors": "^2.8.5",
     "express": "^4.21.0",
-    "socket.io": "^4.7.5",
-    "youtubei.js": "^18.1.0"
+    "socket.io": "^4.7.5"
   }
 }

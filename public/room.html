@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>SyncTune — Room</title>
+  <title>SyncTune — Pure Audio Room</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -49,8 +49,8 @@
       <span id="role-label">Host</span>
     </div>
 
-    <!-- Track Input (Host Only) -->
-    <section id="track-input" class="track-input-section hidden">
+    <!-- Track Input (Change Track) -->
+    <section id="track-input" class="track-input-section">
       <div class="url-input-wrapper">
         <span class="yt-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="#ff0000">
@@ -70,18 +70,15 @@
 
     <!-- Empty State -->
     <section id="empty-state" class="empty-state">
-      <div class="empty-icon">🎵</div>
+      <div class="empty-icon">🎧</div>
       <h3 id="empty-title">Waiting for a track...</h3>
-      <p id="empty-subtitle">The host will pick a song to listen to together</p>
+      <p id="empty-subtitle">Paste any YouTube music link above to listen together in pure audio</p>
     </section>
 
-    <!-- Now Playing -->
+    <!-- Now Playing Artwork Card (Pure Audio, NO VIDEO) -->
     <section id="now-playing" class="now-playing hidden">
       <div class="track-artwork">
-        <div id="yt-player-wrapper">
-          <div id="yt-player"></div>
-        </div>
-        <img id="track-thumbnail" src="" alt="Track artwork" loading="lazy">
+        <img id="track-thumbnail" src="" alt="Album Artwork" loading="lazy">
         <div class="artwork-overlay"></div>
         <div class="sync-badge" id="sync-badge">
           <span class="sync-dot-mini"></span>
@@ -96,7 +93,7 @@
 
       <div class="track-info">
         <h2 id="track-title">—</h2>
-        <p id="track-artist">Unknown Artist</p>
+        <p id="track-artist">YouTube Music</p>
       </div>
 
       <div class="player-mini-bar">
@@ -165,11 +162,10 @@
       </div>
     </section>
 
-    <!-- Spacer for bottom bar -->
     <div style="height: 60px;"></div>
   </div>
 
-  <!-- Sync Status Footer -->
+  <!-- Real-Time Sync Status Footer -->
   <div class="sync-footer" id="sync-footer">
     <div class="sync-left">
       <span class="sync-dot-footer" id="sync-dot-footer"></span>
@@ -177,29 +173,30 @@
     </div>
     <div class="sync-right">
       <span>👥</span>
-      <span id="member-count">1</span>/<span id="max-members">20</span>
+      <span id="member-count">1</span>/<span id="max-members">25</span>
     </div>
   </div>
 
   <!-- Floating Reactions -->
   <div id="floating-reactions" class="floating-reactions"></div>
 
-  <!-- Toast -->
+  <!-- Background / Lock Screen Audio Element -->
+  <audio id="audio-player" preload="auto" playsinline></audio>
+
+  <!-- Toast Notification -->
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Tap to Sync Overlay for Mobile Autoplay -->
+  <!-- Mobile Autoplay Unlock Banner -->
   <div id="sync-prompt-overlay" class="sync-prompt-overlay hidden">
     <div class="sync-prompt-card">
       <div class="sync-prompt-icon">🎧</div>
-      <h3>Tap to Start Listening</h3>
-      <p>Your browser requires one tap to join the synchronized audio stream.</p>
-      <button id="sync-prompt-btn" class="btn btn-primary">Join Audio Stream</button>
+      <h3>Tap to Join Audio Stream</h3>
+      <p>Click below once so your phone allows continuous audio playback, even in lock screen and when minimized.</p>
+      <button id="sync-prompt-btn" class="btn btn-primary">Enable Background Audio</button>
     </div>
   </div>
 
-  <!-- Scripts: Socket.io, YouTube IFrame API, and App Logic -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="https://www.youtube.com/iframe_api"></script>
   <script src="/js/room.js"></script>
 </body>
 </html>
