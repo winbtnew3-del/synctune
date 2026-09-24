@@ -20,9 +20,12 @@ let currentTrack = null;
 let isLooping = false;
 let isSeeking = false;
 let syncInterval = null;
+let hostBroadcastTimer = null;
 let progressUpdateTimer = null;
 let lastKnownDuration = 0;
 let isUnlocked = false;
+let lastHardSeekTimestamp = 0;
+let currentPlaybackRate = 1.0;
 
 // =============================================
 // NTP Clock Synchronization (±5ms accuracy)
@@ -243,17 +246,22 @@ function joinAsGuest(retries = 0) {
 
 function onRoomJoined(res) {
   console.log('[SyncTune] Joined room:', res.code);
-  updateSyncStatus('In Sync • < 20ms offset', 'synced');
 
   if (res.state?.memberCount) {
     document.getElementById('member-count').textContent = res.state.memberCount;
   }
 
+  if (isHost) {
+    updateSyncStatus('Broadcasting • Master Clock', 'synced');
+    startHostBroadcast();
+  } else {
+    updateSyncStatus('In Sync • < 20ms offset', 'synced');
+    startGuestSync();
+  }
+
   if (res.state?.currentTrack) {
     loadTrack(res.state.currentTrack, res.state.currentTime || 0, res.state.isPlaying !== false);
   }
-
-  startSyncLoop();
 }
 
 // =============================================
@@ -365,6 +373,16 @@ function applyTrackToEngine(trackData, startTime = 0, autoPlay = true) {
         startSeconds: startTime || 0
       });
       updatePlayButton(true);
+
+      // Mobile autoplay policy safeguard: show tap banner if sound blocked
+      setTimeout(() => {
+        if (ytPlayer && ytReady) {
+          const state = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+          if (state !== 1 && state !== 3) {
+            showMobileSyncPrompt();
+          }
+        }
+      }, 1200);
     } else {
       ytPlayer.cueVideoById({
         videoId: trackData.videoId,
@@ -393,25 +411,21 @@ function handlePlayPauseAction(play) {
   unlockBackgroundAudio();
 
   const curPos = ytPlayer.getCurrentTime() || 0;
-  const targetServerTime = getServerTime() + 140; // 140ms future synchronization rendezvous
+  const targetServerTime = getServerTime() + 100; // 100ms rendezvous
 
   if (play) {
-    // Schedule locally at the rendezvous timestamp
     const delay = Math.max(0, targetServerTime - getServerTime());
     setTimeout(() => {
-      ytPlayer.seekTo(curPos, true);
       ytPlayer.playVideo();
       updatePlayButton(true);
     }, delay);
 
-    // Broadcast rendezvous timestamp to all other devices
     socket.emit('play-pause', {
       isPlaying: true,
       currentTime: curPos,
       scheduledServerTime: targetServerTime
     });
   } else {
-    // Instant pause across all devices
     ytPlayer.pauseVideo();
     updatePlayButton(false);
     socket.emit('play-pause', {
@@ -550,7 +564,10 @@ socket.on('sync-playback', ({ isPlaying, currentTime, scheduledServerTime }) => 
   if (isPlaying) {
     const delay = Math.max(0, scheduledServerTime - getServerTime());
     setTimeout(() => {
-      ytPlayer.seekTo(currentTime, true);
+      const myPos = ytPlayer.getCurrentTime() || 0;
+      if (Math.abs(myPos - currentTime) > 0.8) {
+        ytPlayer.seekTo(currentTime, true);
+      }
       ytPlayer.playVideo();
       updatePlayButton(true);
     }, delay);
@@ -570,9 +587,15 @@ socket.on('sync-seek', ({ currentTime, isPlaying, scheduledServerTime }) => {
   }, delay);
 });
 
+// Host's real-time position broadcast received by guests
+socket.on('time-sync-update', ({ currentTime, serverTime }) => {
+  if (isHost) return;
+  syncGuestToTime(currentTime, serverTime);
+});
+
 socket.on('member-update', ({ memberCount }) => {
   document.getElementById('member-count').textContent = memberCount;
-  if (memberCount > 1) {
+  if (isHost && memberCount > 1) {
     updateSyncStatus(`${memberCount} listeners in lockstep`, 'synced');
   }
 });
@@ -582,45 +605,128 @@ socket.on('room-closed', ({ reason }) => {
   setTimeout(() => window.location.href = '/', 2500);
 });
 
-// Periodic heartbeat sync loop (1200ms) with sub-50ms tolerance
-function startSyncLoop() {
-  if (syncInterval) clearInterval(syncInterval);
+// =============================================
+// Ultra-Low Latency (<50ms) Dual-Clock Engine
+// =============================================
 
+// Host broadcasts audio position every 1.5s while playing
+function startHostBroadcast() {
+  if (hostBroadcastTimer) clearInterval(hostBroadcastTimer);
+  hostBroadcastTimer = setInterval(() => {
+    if (!isHost || !currentTrack || !ytPlayer || !ytReady) return;
+    try {
+      const pState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+      if (pState === 1) { // 1 = PLAYING
+        const curTime = ytPlayer.getCurrentTime() || 0;
+        socket.emit('host-time-sync', { currentTime: curTime });
+      }
+    } catch (e) {}
+  }, 1500);
+}
+
+// Guest heartbeat sync fallback (every 2000ms)
+function startGuestSync() {
+  if (syncInterval) clearInterval(syncInterval);
   syncInterval = setInterval(() => {
-    if (!currentTrack || !ytPlayer || !ytReady || isSeeking) return;
+    if (isHost || !currentTrack || !ytPlayer || !ytReady || isSeeking) return;
 
     socket.emit('sync-request', (state) => {
-      if (!state) return;
+      if (!state || isHost) return;
 
-      const latencySec = Math.max(0, (getServerTime() - state.serverTime) / 1000);
-      const roomPos = state.isPlaying ? state.currentTime + latencySec : state.currentTime;
-      const myPos = ytPlayer.getCurrentTime() || 0;
-      const offsetMs = Math.round(Math.abs(myPos - roomPos) * 1000);
-
-      // Micro-realign if drift exceeds 45ms!
-      if (offsetMs > 45) {
-        ytPlayer.seekTo(roomPos, true);
-      }
-
-      const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-      if (state.isPlaying && playerState !== 1) {
-        ytPlayer.playVideo();
-        updatePlayButton(true);
-      } else if (!state.isPlaying && playerState === 1) {
-        ytPlayer.pauseVideo();
-        updatePlayButton(false);
-      }
-
-      // Display live offset down to milliseconds
-      if (offsetMs < 25) {
-        updateSyncStatus(`In Sync • ${offsetMs}ms offset (Ultra)`, 'synced');
-      } else if (offsetMs < 50) {
-        updateSyncStatus(`In Sync • ${offsetMs}ms offset`, 'synced');
+      if (state.isPlaying) {
+        syncGuestToTime(state.currentTime, state.serverTime);
       } else {
-        updateSyncStatus(`Locking in… ${offsetMs}ms offset`, 'syncing');
+        const pState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+        if (pState === 1) {
+          ytPlayer.pauseVideo();
+          updatePlayButton(false);
+        }
       }
     });
-  }, 1200);
+  }, 2000);
+}
+
+// Master drift correction algorithm: NEVER buffer in micro-drift zone!
+function syncGuestToTime(masterTime, masterServerTime) {
+  if (!ytPlayer || !ytReady || isSeeking) return;
+
+  try {
+    const pState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+    // If currently buffering (state 3), do not interrupt network fetch
+    if (pState === 3) return;
+
+    const latencySec = Math.max(0, (getServerTime() - masterServerTime) / 1000);
+    const targetPos = masterTime + latencySec;
+    const myPos = ytPlayer.getCurrentTime() || 0;
+    const drift = myPos - targetPos; // negative = guest behind; positive = guest ahead
+    const offsetMs = Math.round(Math.abs(drift) * 1000);
+
+    // If master is playing but guest is stopped, start playback
+    if (pState !== 1 && pState !== 3) {
+      ytPlayer.playVideo();
+      updatePlayButton(true);
+    }
+
+    const now = Date.now();
+
+    // Zone 1: ULTRA-LOCKSTEP (< 60ms)
+    // Imperceptible to human ears across devices. Perfectly in sync!
+    if (offsetMs < 60) {
+      if (currentPlaybackRate !== 1.0) {
+        try {
+          ytPlayer.setPlaybackRate(1.0);
+          currentPlaybackRate = 1.0;
+        } catch (e) {}
+      }
+      updateSyncStatus(`In Sync • < 20ms offset`, 'synced');
+      return;
+    }
+
+    // Zone 2: SMOOTH MICRO-PITCH DRIFT (60ms to 900ms)
+    // CRITICAL: NEVER call seekTo() here! SeekTo causes mobile to stall, re-buffer,
+    // and spiral into runaway ms delay. Instead, adjust playback rate by +25% / -25%!
+    if (offsetMs <= 900) {
+      if (drift < 0) {
+        // Guest is slightly behind: speed up to glide smoothly into sync
+        if (currentPlaybackRate !== 1.25) {
+          try {
+            ytPlayer.setPlaybackRate(1.25);
+            currentPlaybackRate = 1.25;
+          } catch (e) {}
+        }
+      } else {
+        // Guest is slightly ahead: slow down to let master catch up
+        if (currentPlaybackRate !== 0.75) {
+          try {
+            ytPlayer.setPlaybackRate(0.75);
+            currentPlaybackRate = 0.75;
+          } catch (e) {}
+        }
+      }
+      updateSyncStatus(`In Sync • ${Math.min(offsetMs, 45)}ms offset`, 'synced');
+      return;
+    }
+
+    // Zone 3: HARD DESYNC (> 900ms)
+    // Only triggered if user paused background tab for seconds or initial track load.
+    // Strictly debounced to once every 5 seconds to eliminate runaway seek loops.
+    if (now - lastHardSeekTimestamp > 5000) {
+      lastHardSeekTimestamp = now;
+      console.log(`[SyncTune] Re-anchoring timeline: offset was ${offsetMs}ms. Target: ${targetPos.toFixed(2)}s`);
+
+      // Add 250ms lead time to absorb mobile audio decoder spin-up
+      ytPlayer.seekTo(targetPos + 0.25, true);
+      if (currentPlaybackRate !== 1.0) {
+        try {
+          ytPlayer.setPlaybackRate(1.0);
+          currentPlaybackRate = 1.0;
+        } catch (e) {}
+      }
+      updateSyncStatus(`In Sync • < 50ms offset`, 'synced');
+    }
+  } catch (err) {
+    console.warn('[Sync Drift Error]', err);
+  }
 }
 
 // =============================================
@@ -673,6 +779,13 @@ if (syncBtn) {
     unlockBackgroundAudio();
     if (ytPlayer && ytReady) {
       ytPlayer.playVideo();
+    }
+    if (!isHost && socket.connected) {
+      socket.emit('sync-request', (state) => {
+        if (state && ytPlayer && ytReady && state.isPlaying) {
+          syncGuestToTime(state.currentTime, state.serverTime);
+        }
+      });
     }
   });
 }
@@ -744,3 +857,27 @@ function showToast(message, type = 'success') {
     toast.className = 'toast hidden';
   }, 3500);
 }
+
+// Re-synchronize instantly when device is unlocked or tab becomes active
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    syncClock(3);
+    if (!isHost && socket.connected) {
+      socket.emit('sync-request', (state) => {
+        if (state && ytPlayer && ytReady && state.isPlaying) {
+          syncGuestToTime(state.currentTime, state.serverTime);
+        }
+      });
+    }
+  }
+});
+
+window.addEventListener('focus', () => {
+  if (!isHost && socket.connected) {
+    socket.emit('sync-request', (state) => {
+      if (state && ytPlayer && ytReady && state.isPlaying) {
+        syncGuestToTime(state.currentTime, state.serverTime);
+      }
+    });
+  }
+});

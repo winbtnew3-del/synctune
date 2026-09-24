@@ -130,10 +130,10 @@ app.get('/health', (_req, res) => {
 });
 
 // =============================================
-// Socket.IO — Real-time Room Sync (Ultra-Low Latency)
+// Socket.IO — Real-time Room Sync
 // =============================================
 io.on('connection', (socket) => {
-  // ---------- High-Precision NTP Clock Sync ----------
+  // ---------- NTP Clock Ping ----------
   socket.on('sync-ping', (clientT0, callback) => {
     if (typeof callback === 'function') {
       callback({ clientT0, serverT1: Date.now() });
@@ -230,7 +230,6 @@ io.on('connection', (socket) => {
     room.currentTime = 0;
     room.lastUpdate = now;
 
-    // Broadcast track change with future timestamp synchronization
     socket.to(socket.roomCode).emit('track-changed', {
       track: trackData,
       currentTime: 0,
@@ -239,47 +238,57 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ---------- Play / Pause (Ultra-Low Latency Rendezvous) ----------
+  // ---------- Host Real-Time Time Sync Broadcast ----------
+  socket.on('host-time-sync', ({ currentTime }) => {
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+
+    const now = Date.now();
+    room.currentTime = currentTime;
+    room.lastUpdate = now;
+
+    // Send host's exact audio time to all guests
+    socket.to(socket.roomCode).emit('time-sync-update', {
+      currentTime,
+      serverTime: now
+    });
+  });
+
+  // ---------- Play / Pause Synchronized ----------
   socket.on('play-pause', ({ isPlaying, currentTime, scheduledServerTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
     const now = Date.now();
-    const targetTime = scheduledServerTime || (now + 120);
-
     room.isPlaying = isPlaying;
     room.currentTime = currentTime;
     room.lastUpdate = now;
 
-    // Broadcast future rendezvous timestamp so both devices trigger at the EXACT same millisecond!
     socket.to(socket.roomCode).emit('sync-playback', {
       isPlaying,
       currentTime,
-      scheduledServerTime: targetTime,
+      scheduledServerTime: scheduledServerTime || now,
       serverTime: now
     });
   });
 
-  // ---------- Seek (Ultra-Low Latency Rendezvous) ----------
-  socket.on('seek', ({ currentTime, scheduledServerTime }) => {
+  // ---------- Seek Synchronized ----------
+  socket.on('seek', ({ currentTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
     const now = Date.now();
-    const targetTime = scheduledServerTime || (now + 100);
-
     room.currentTime = currentTime;
     room.lastUpdate = now;
 
     socket.to(socket.roomCode).emit('sync-seek', {
       currentTime,
       isPlaying: room.isPlaying,
-      scheduledServerTime: targetTime,
       serverTime: now
     });
   });
 
-  // ---------- Heartbeat Sync Request ----------
+  // ---------- Heartbeat Query ----------
   socket.on('sync-request', (callback) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return callback && callback(null);
@@ -289,7 +298,8 @@ io.on('connection', (socket) => {
     if (room.isPlaying) {
       currentTime += Math.max(0, (now - room.lastUpdate) / 1000);
     }
-    if (callback) {
+
+    if (typeof callback === 'function') {
       callback({
         currentTime,
         isPlaying: room.isPlaying,
