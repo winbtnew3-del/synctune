@@ -201,18 +201,12 @@ app.get('/api/debug-stream', (req, res) => {
     const exists = fs.existsSync(ytdlpBinary);
     if (!exists) return res.json({ error: 'Binary does not exist' });
 
-    execFile(ytdlpBinary, ['--version'], { timeout: 5000 }, (err, stdout, stderr) => {
-      if (err) {
-        return res.json({ versionError: err.message, stderr });
-      }
-      execFile(ytdlpBinary, ['-g', '-f', 'ba[ext=m4a]/ba', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'], { timeout: 15000 }, (err2, stdout2, stderr2) => {
-        res.json({
-          version: stdout.trim(),
-          streamSuccess: !err2,
-          streamUrl: stdout2 ? stdout2.trim().substring(0, 60) + '...' : null,
-          streamError: err2 ? err2.message : null,
-          stderr: stderr2
-        });
+    const { exec } = require('child_process');
+    exec('which python3; which pip; which yt-dlp; ls -la /opt/render/project/src/yt-dlp; /opt/render/project/src/yt-dlp --version', (shErr, shOut, shErrOut) => {
+      res.json({
+        shOut,
+        shErrOut,
+        shErr: shErr ? shErr.message : null
       });
     });
   } catch (err) {
