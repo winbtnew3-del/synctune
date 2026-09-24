@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const https = require('https');
-const { spawn, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
@@ -30,7 +30,8 @@ console.log('[SyncTune] Using yt-dlp binary at:', ytdlpBinary, fs.existsSync(ytd
 // =============================================
 const rooms = new Map();
 const infoCache = new Map();
-const CACHE_TTL = 60 * 60 * 1000; // 1 hr
+const streamUrlCache = new Map();
+const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hrs (YouTube URLs usually valid for 6h)
 
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -61,56 +62,77 @@ function extractVideoId(url) {
   return null;
 }
 
-// Fetch metadata: fast oEmbed + duration check
-function fetchVideoInfo(videoId) {
+// Fetch fast metadata via oEmbed
+function fetchOEmbed(videoId) {
   return new Promise((resolve) => {
     const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    
     https.get(oembedUrl, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        let meta = {
-          videoId,
-          title: 'YouTube Track',
-          artist: 'YouTube Music',
-          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-          duration: 0
-        };
-
         if (res.statusCode === 200) {
           try {
             const parsed = JSON.parse(data);
-            meta.title = parsed.title || meta.title;
-            meta.artist = parsed.author_name || meta.artist;
+            return resolve({
+              title: parsed.title,
+              artist: parsed.author_name
+            });
           } catch (e) {}
         }
+        resolve(null);
+      });
+    }).on('error', () => resolve(null));
+  });
+}
 
-        // Try getting exact duration from yt-dlp in background (non-blocking fallback)
-        if (fs.existsSync(ytdlpBinary)) {
-          execFile(ytdlpBinary, ['--get-duration', `https://www.youtube.com/watch?v=${videoId}`], { timeout: 4000 }, (err, stdout) => {
-            if (!err && stdout) {
-              const parts = stdout.trim().split(':').map(Number);
-              let durSec = 0;
-              if (parts.length === 3) durSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-              else if (parts.length === 2) durSec = parts[0] * 60 + parts[1];
-              else if (parts.length === 1) durSec = parts[0];
-              if (durSec > 0) meta.duration = durSec;
-            }
-            resolve(meta);
-          });
-        } else {
-          resolve(meta);
+// Extract direct audio stream URL and duration using yt-dlp
+function extractAudioStreamUrl(videoId) {
+  return new Promise((resolve, reject) => {
+    const cached = streamUrlCache.get(videoId);
+    if (cached && Date.now() - cached.ts < CACHE_TTL) {
+      return resolve(cached.data);
+    }
+
+    if (!fs.existsSync(ytdlpBinary)) {
+      return reject(new Error('yt-dlp binary missing'));
+    }
+
+    const args = [
+      '-g',
+      '-f', 'ba[ext=m4a]/ba',
+      '--get-duration',
+      '--no-warnings',
+      '--no-playlist',
+      `https://www.youtube.com/watch?v=${videoId}`
+    ];
+
+    execFile(ytdlpBinary, args, { timeout: 12000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[yt-dlp error]', stderr || err.message);
+        return reject(err);
+      }
+
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      let durationSec = 0;
+      let directUrl = null;
+
+      for (const line of lines) {
+        if (line.startsWith('http')) {
+          directUrl = line.trim();
+        } else if (line.includes(':')) {
+          const parts = line.trim().split(':').map(Number);
+          if (parts.length === 3) durationSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+          else if (parts.length === 2) durationSec = parts[0] * 60 + parts[1];
         }
-      });
-    }).on('error', () => {
-      resolve({
-        videoId,
-        title: `Track (${videoId})`,
-        artist: 'YouTube Audio',
-        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        duration: 0
-      });
+      }
+
+      if (!directUrl) {
+        return reject(new Error('No direct stream URL found'));
+      }
+
+      const result = { directUrl, duration: durationSec };
+      streamUrlCache.set(videoId, { data: result, ts: Date.now() });
+      resolve(result);
     });
   });
 }
@@ -119,7 +141,7 @@ function fetchVideoInfo(videoId) {
 // REST Endpoints
 // =============================================
 
-// Video info
+// Video Info
 app.get('/api/info/:videoId', async (req, res) => {
   const videoId = extractVideoId(req.params.videoId);
   if (!videoId) {
@@ -132,7 +154,19 @@ app.get('/api/info/:videoId', async (req, res) => {
   }
 
   try {
-    const data = await fetchVideoInfo(videoId);
+    const [oembedMeta, streamMeta] = await Promise.all([
+      fetchOEmbed(videoId),
+      extractAudioStreamUrl(videoId).catch(() => ({ duration: 0 }))
+    ]);
+
+    const data = {
+      videoId,
+      title: oembedMeta?.title || 'YouTube Track',
+      artist: oembedMeta?.artist || 'YouTube Music',
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      duration: streamMeta.duration || 0
+    };
+
     infoCache.set(videoId, { data, ts: Date.now() });
     res.json(data);
   } catch (err) {
@@ -146,59 +180,27 @@ app.get('/api/info/:videoId', async (req, res) => {
   }
 });
 
-// Dedicated Audio Streaming Server Proxy:
-// Pipes pure audio directly to the HTML5 audio element
-app.get('/api/stream/:videoId', (req, res) => {
+// Direct Audio Stream Proxy/Redirect:
+// Delivers pure audio directly to the HTML5 <audio> tag with native byte-range support
+app.get('/api/stream/:videoId', async (req, res) => {
   const videoId = extractVideoId(req.params.videoId);
-  if (!videoId) {
-    return res.status(400).send('Invalid video ID');
+  if (!videoId) return res.status(400).send('Invalid video ID');
+
+  try {
+    const { directUrl } = await extractAudioStreamUrl(videoId);
+    // Redirect directly to high-speed Google Video audio CDN with byte-range seeking support
+    res.redirect(302, directUrl);
+  } catch (err) {
+    console.error('[Stream Error]', err.message);
+    res.status(500).send('Could not extract audio stream');
   }
-
-  if (!fs.existsSync(ytdlpBinary)) {
-    console.error('[Stream] yt-dlp binary missing at:', ytdlpBinary);
-    return res.status(500).send('Audio streaming binary unavailable');
-  }
-
-  console.log(`[Stream] Starting audio stream for: ${videoId}`);
-
-  res.setHeader('Content-Type', 'audio/mp4');
-  res.setHeader('Accept-Ranges', 'none');
-  res.setHeader('Cache-Control', 'no-cache');
-
-  // Spawn yt-dlp to stream audio/mp4 directly to stdout
-  const ytdlp = spawn(ytdlpBinary, [
-    '-o', '-',
-    '-f', 'ba[ext=m4a]/ba',
-    '--no-warnings',
-    '--no-playlist',
-    `https://www.youtube.com/watch?v=${videoId}`
-  ]);
-
-  ytdlp.stdout.pipe(res);
-
-  ytdlp.stderr.on('data', (d) => {
-    // console.log(`[yt-dlp stderr] ${d.toString()}`);
-  });
-
-  ytdlp.on('error', (err) => {
-    console.error('[Stream] Spawn error:', err.message);
-    if (!res.headersSent) res.status(500).end();
-  });
-
-  // Kill child process if user closes tab/disconnects
-  req.on('close', () => {
-    try {
-      ytdlp.kill('SIGKILL');
-    } catch (e) {}
-  });
 });
 
-// Serve room page
+// Room page
 app.get('/room', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
 });
 
-// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', rooms: rooms.size });
 });
@@ -295,7 +297,7 @@ io.on('connection', (socket) => {
     room.currentTime = 0;
     room.lastUpdate = Date.now();
 
-    // Broadcast to EVERYONE in room (including other guests/hosts)
+    // Broadcast track change to all other listeners
     socket.to(socket.roomCode).emit('track-changed', {
       track: trackData,
       currentTime: 0,
@@ -303,7 +305,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ---------- Play / Pause (Synced for BOTH devices) ----------
+  // ---------- Play / Pause (Two-way sync: PC <-> Mobile) ----------
   socket.on('play-pause', ({ isPlaying, currentTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
@@ -312,7 +314,7 @@ io.on('connection', (socket) => {
     room.currentTime = currentTime;
     room.lastUpdate = Date.now();
 
-    // Broadcast to ALL OTHER listeners so both phone & computer pause/play together!
+    // Broadcast to ALL OTHER listeners so both phone & computer pause/play simultaneously!
     socket.to(socket.roomCode).emit('sync-playback', {
       isPlaying,
       currentTime,
@@ -320,7 +322,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ---------- Seek (Synced for BOTH devices) ----------
+  // ---------- Seek (Two-way sync: PC <-> Mobile) ----------
   socket.on('seek', ({ currentTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
@@ -335,7 +337,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ---------- Heartbeat Sync Request ----------
+  // ---------- Heartbeat Sync ----------
   socket.on('sync-request', (callback) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return callback && callback(null);
@@ -375,14 +377,13 @@ io.on('connection', (socket) => {
       room.hostDisconnectTimer = setTimeout(() => {
         io.to(socket.roomCode).emit('room-closed', { reason: 'Host has left the room.' });
         rooms.delete(socket.roomCode);
-      }, 30000); // 30s grace period for refresh/network blip
+      }, 30000);
     } else {
       io.to(socket.roomCode).emit('member-update', { memberCount: room.members.size });
     }
   });
 });
 
-// Periodic cleanup
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
