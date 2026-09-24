@@ -196,6 +196,24 @@ app.get('/api/stream/:videoId', async (req, res) => {
   }
 });
 
+app.get('/api/debug-stream', (req, res) => {
+  try {
+    const exists = fs.existsSync(ytdlpBinary);
+    let stat = null;
+    if (exists) {
+      stat = fs.statSync(ytdlpBinary);
+    }
+    res.json({
+      ytdlpBinary,
+      exists,
+      stat,
+      dirContents: fs.readdirSync(path.join(__dirname, '..')).filter(f => !f.startsWith('.') && f !== 'node_modules')
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // Room page
 app.get('/room', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
