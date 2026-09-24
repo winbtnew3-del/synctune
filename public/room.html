@@ -49,7 +49,7 @@
       <span id="role-label">Host</span>
     </div>
 
-    <!-- Track Input (Change Track) -->
+    <!-- Track Input -->
     <section id="track-input" class="track-input-section">
       <div class="url-input-wrapper">
         <span class="yt-icon">
@@ -72,10 +72,10 @@
     <section id="empty-state" class="empty-state">
       <div class="empty-icon">🎧</div>
       <h3 id="empty-title">Waiting for a track...</h3>
-      <p id="empty-subtitle">Paste any YouTube music link above to listen together in pure audio</p>
+      <p id="empty-subtitle">Paste any YouTube link above to stream pure synchronized audio</p>
     </section>
 
-    <!-- Now Playing Artwork Card (Pure Audio, NO VIDEO) -->
+    <!-- Now Playing: Pure Audio Album Artwork (NO VIDEO) -->
     <section id="now-playing" class="now-playing hidden">
       <div class="track-artwork">
         <img id="track-thumbnail" src="" alt="Album Artwork" loading="lazy">
@@ -173,15 +173,12 @@
     </div>
     <div class="sync-right">
       <span>👥</span>
-      <span id="member-count">1</span>/<span id="max-members">25</span>
+      <span id="member-count">1</span>/<span id="max-members">30</span>
     </div>
   </div>
 
   <!-- Floating Reactions -->
   <div id="floating-reactions" class="floating-reactions"></div>
-
-  <!-- Background / Lock Screen Audio Element -->
-  <audio id="audio-player" preload="auto" playsinline></audio>
 
   <!-- Toast Notification -->
   <div id="toast" class="toast hidden"></div>
@@ -190,13 +187,22 @@
   <div id="sync-prompt-overlay" class="sync-prompt-overlay hidden">
     <div class="sync-prompt-card">
       <div class="sync-prompt-icon">🎧</div>
-      <h3>Tap to Join Audio Stream</h3>
-      <p>Click below once so your phone allows continuous audio playback, even in lock screen and when minimized.</p>
-      <button id="sync-prompt-btn" class="btn btn-primary">Enable Background Audio</button>
+      <h3>Tap to Start Listening</h3>
+      <p>Tap below to start listening in perfect sync with the room.</p>
+      <button id="sync-prompt-btn" class="btn btn-primary">Join Room Audio</button>
     </div>
   </div>
 
+  <!-- Hidden Off-Screen YouTube Audio Engine (NO VIDEO DISPLAYED) -->
+  <div id="yt-player-wrapper" style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px; opacity:0.001; pointer-events:none; overflow:hidden;">
+    <div id="yt-player"></div>
+  </div>
+
+  <!-- Hidden Background Audio Keeper for Mobile Lock Screen & Minimized Playback -->
+  <audio id="bg-audio-keeper" loop preload="auto" playsinline src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
   <script src="/js/room.js"></script>
 </body>
 </html>

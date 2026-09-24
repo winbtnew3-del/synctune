@@ -1,10 +1,9 @@
 {
   "name": "synctune",
   "version": "1.0.0",
-  "description": "SyncTune - Listen Together in Real-Time",
+  "description": "SyncTune - Real-time Synchronized Music Listening Rooms",
   "main": "server/index.js",
   "scripts": {
-    "postinstall": "node scripts/install-ytdlp.js",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js"
   },

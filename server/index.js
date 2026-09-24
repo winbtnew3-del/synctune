@@ -1,10 +1,8 @@
 const express = require('express');
 const http = require('http');
 const https = require('https');
-const { execFile } = require('child_process');
 const { Server } = require('socket.io');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,20 +16,12 @@ const io = new Server(server, {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Path to yt-dlp binary
-const ytdlpBinary = process.platform === 'win32'
-  ? path.join(__dirname, '..', 'yt-dlp.exe')
-  : path.join(__dirname, '..', 'yt-dlp');
-
-console.log('[SyncTune] Using yt-dlp binary at:', ytdlpBinary, fs.existsSync(ytdlpBinary) ? '(found)' : '(missing)');
-
 // =============================================
 // Room Management & State
 // =============================================
 const rooms = new Map();
 const infoCache = new Map();
-const streamUrlCache = new Map();
-const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hrs (YouTube URLs usually valid for 6h)
+const CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hrs
 
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -62,7 +52,7 @@ function extractVideoId(url) {
   return null;
 }
 
-// Fetch fast metadata via oEmbed
+// Fetch metadata via YouTube's official oEmbed API
 function fetchOEmbed(videoId) {
   return new Promise((resolve) => {
     const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
@@ -74,66 +64,27 @@ function fetchOEmbed(videoId) {
           try {
             const parsed = JSON.parse(data);
             return resolve({
-              title: parsed.title,
-              artist: parsed.author_name
+              videoId,
+              title: parsed.title || 'YouTube Track',
+              artist: parsed.author_name || 'YouTube Music',
+              thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
             });
           } catch (e) {}
         }
-        resolve(null);
+        resolve({
+          videoId,
+          title: `Track (${videoId})`,
+          artist: 'YouTube Music',
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+        });
       });
-    }).on('error', () => resolve(null));
-  });
-}
-
-// Extract direct audio stream URL and duration using yt-dlp
-function extractAudioStreamUrl(videoId) {
-  return new Promise((resolve, reject) => {
-    const cached = streamUrlCache.get(videoId);
-    if (cached && Date.now() - cached.ts < CACHE_TTL) {
-      return resolve(cached.data);
-    }
-
-    if (!fs.existsSync(ytdlpBinary)) {
-      return reject(new Error('yt-dlp binary missing'));
-    }
-
-    const args = [
-      '-g',
-      '-f', 'ba/b',
-      '--extractor-args', 'youtube:player_client=android,web',
-      '--get-duration',
-      '--no-warnings',
-      '--no-playlist',
-      `https://www.youtube.com/watch?v=${videoId}`
-    ];
-
-    execFile(ytdlpBinary, args, { timeout: 12000 }, (err, stdout, stderr) => {
-      if (err) {
-        console.error('[yt-dlp error]', stderr || err.message);
-        return reject(err);
-      }
-
-      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
-      let durationSec = 0;
-      let directUrl = null;
-
-      for (const line of lines) {
-        if (line.startsWith('http')) {
-          directUrl = line.trim();
-        } else if (line.includes(':')) {
-          const parts = line.trim().split(':').map(Number);
-          if (parts.length === 3) durationSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-          else if (parts.length === 2) durationSec = parts[0] * 60 + parts[1];
-        }
-      }
-
-      if (!directUrl) {
-        return reject(new Error('No direct stream URL found'));
-      }
-
-      const result = { directUrl, duration: durationSec };
-      streamUrlCache.set(videoId, { data: result, ts: Date.now() });
-      resolve(result);
+    }).on('error', () => {
+      resolve({
+        videoId,
+        title: `Track (${videoId})`,
+        artist: 'YouTube Music',
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+      });
     });
   });
 }
@@ -155,19 +106,7 @@ app.get('/api/info/:videoId', async (req, res) => {
   }
 
   try {
-    const [oembedMeta, streamMeta] = await Promise.all([
-      fetchOEmbed(videoId),
-      extractAudioStreamUrl(videoId).catch(() => ({ duration: 0 }))
-    ]);
-
-    const data = {
-      videoId,
-      title: oembedMeta?.title || 'YouTube Track',
-      artist: oembedMeta?.artist || 'YouTube Music',
-      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-      duration: streamMeta.duration || 0
-    };
-
+    const data = await fetchOEmbed(videoId);
     infoCache.set(videoId, { data, ts: Date.now() });
     res.json(data);
   } catch (err) {
@@ -175,43 +114,8 @@ app.get('/api/info/:videoId', async (req, res) => {
       videoId,
       title: 'YouTube Track',
       artist: 'YouTube Music',
-      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-      duration: 0
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
     });
-  }
-});
-
-// Direct Audio Stream Proxy/Redirect:
-// Delivers pure audio directly to the HTML5 <audio> tag with native byte-range support
-app.get('/api/stream/:videoId', async (req, res) => {
-  const videoId = extractVideoId(req.params.videoId);
-  if (!videoId) return res.status(400).send('Invalid video ID');
-
-  try {
-    const { directUrl } = await extractAudioStreamUrl(videoId);
-    // Redirect directly to high-speed Google Video audio CDN with byte-range seeking support
-    res.redirect(302, directUrl);
-  } catch (err) {
-    console.error('[Stream Error]', err.message);
-    res.status(500).send('Could not extract audio stream');
-  }
-});
-
-app.get('/api/debug-stream', (req, res) => {
-  try {
-    const exists = fs.existsSync(ytdlpBinary);
-    if (!exists) return res.json({ error: 'Binary does not exist' });
-
-    const { exec } = require('child_process');
-    exec(`${ytdlpBinary} -g -f "ba/b" --extractor-args "youtube:player_client=android,web" --no-warnings --no-playlist "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`, { timeout: 20000 }, (err, stdout, stderr) => {
-      res.json({
-        err: err ? err.message : null,
-        stdout: stdout ? stdout.trim() : null,
-        stderr: stderr ? stderr.trim() : null
-      });
-    });
-  } catch (err) {
-    res.json({ error: err.message });
   }
 });
 
@@ -220,12 +124,13 @@ app.get('/room', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
 });
 
+// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', rooms: rooms.size });
 });
 
 // =============================================
-// Socket.IO — Real-time Room Sync
+// Socket.IO — Real-time Room Sync (Two-Way)
 // =============================================
 io.on('connection', (socket) => {
   // ---------- Create Room ----------
@@ -277,8 +182,8 @@ io.on('connection', (socket) => {
     if (!room) {
       return callback({ success: false, error: 'Room not found. Check the code.' });
     }
-    if (room.members.size >= 25) {
-      return callback({ success: false, error: 'Room is full (max 25).' });
+    if (room.members.size >= 30) {
+      return callback({ success: false, error: 'Room is full (max 30).' });
     }
 
     room.members.set(socket.id, { role: 'guest', joinedAt: Date.now() });
