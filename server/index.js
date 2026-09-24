@@ -52,7 +52,7 @@ function extractVideoId(url) {
   return null;
 }
 
-// Fetch metadata via YouTube's official oEmbed API
+// Fetch fast metadata via YouTube oEmbed
 function fetchOEmbed(videoId) {
   return new Promise((resolve) => {
     const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
@@ -130,9 +130,16 @@ app.get('/health', (_req, res) => {
 });
 
 // =============================================
-// Socket.IO — Real-time Room Sync (Two-Way)
+// Socket.IO — Real-time Room Sync (Ultra-Low Latency)
 // =============================================
 io.on('connection', (socket) => {
+  // ---------- High-Precision NTP Clock Sync ----------
+  socket.on('sync-ping', (clientT0, callback) => {
+    if (typeof callback === 'function') {
+      callback({ clientT0, serverT1: Date.now() });
+    }
+  });
+
   // ---------- Create Room ----------
   socket.on('create-room', (data, callback) => {
     if (typeof data === 'function') { callback = data; data = {}; }
@@ -193,7 +200,7 @@ io.on('connection', (socket) => {
 
     let currentTime = room.currentTime;
     if (room.isPlaying) {
-      currentTime += (Date.now() - room.lastUpdate) / 1000;
+      currentTime += Math.max(0, (Date.now() - room.lastUpdate) / 1000);
     }
 
     io.to(code).emit('member-update', { memberCount: room.members.size });
@@ -206,6 +213,7 @@ io.on('connection', (socket) => {
         currentTrack: room.currentTrack,
         isPlaying: room.isPlaying,
         currentTime,
+        serverTime: Date.now(),
         memberCount: room.members.size
       }
     });
@@ -216,65 +224,76 @@ io.on('connection', (socket) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
+    const now = Date.now();
     room.currentTrack = trackData;
     room.isPlaying = true;
     room.currentTime = 0;
-    room.lastUpdate = Date.now();
+    room.lastUpdate = now;
 
-    // Broadcast track change to all other listeners
+    // Broadcast track change with future timestamp synchronization
     socket.to(socket.roomCode).emit('track-changed', {
       track: trackData,
       currentTime: 0,
-      isPlaying: true
+      isPlaying: true,
+      serverTime: now
     });
   });
 
-  // ---------- Play / Pause (Two-way sync: PC <-> Mobile) ----------
-  socket.on('play-pause', ({ isPlaying, currentTime }) => {
+  // ---------- Play / Pause (Ultra-Low Latency Rendezvous) ----------
+  socket.on('play-pause', ({ isPlaying, currentTime, scheduledServerTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
+
+    const now = Date.now();
+    const targetTime = scheduledServerTime || (now + 120);
 
     room.isPlaying = isPlaying;
     room.currentTime = currentTime;
-    room.lastUpdate = Date.now();
+    room.lastUpdate = now;
 
-    // Broadcast to ALL OTHER listeners so both phone & computer pause/play simultaneously!
+    // Broadcast future rendezvous timestamp so both devices trigger at the EXACT same millisecond!
     socket.to(socket.roomCode).emit('sync-playback', {
       isPlaying,
       currentTime,
-      serverTime: Date.now()
+      scheduledServerTime: targetTime,
+      serverTime: now
     });
   });
 
-  // ---------- Seek (Two-way sync: PC <-> Mobile) ----------
-  socket.on('seek', ({ currentTime }) => {
+  // ---------- Seek (Ultra-Low Latency Rendezvous) ----------
+  socket.on('seek', ({ currentTime, scheduledServerTime }) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
+    const now = Date.now();
+    const targetTime = scheduledServerTime || (now + 100);
+
     room.currentTime = currentTime;
-    room.lastUpdate = Date.now();
+    room.lastUpdate = now;
 
     socket.to(socket.roomCode).emit('sync-seek', {
       currentTime,
       isPlaying: room.isPlaying,
-      serverTime: Date.now()
+      scheduledServerTime: targetTime,
+      serverTime: now
     });
   });
 
-  // ---------- Heartbeat Sync ----------
+  // ---------- Heartbeat Sync Request ----------
   socket.on('sync-request', (callback) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return callback && callback(null);
 
+    const now = Date.now();
     let currentTime = room.currentTime;
     if (room.isPlaying) {
-      currentTime += (Date.now() - room.lastUpdate) / 1000;
+      currentTime += Math.max(0, (now - room.lastUpdate) / 1000);
     }
     if (callback) {
       callback({
         currentTime,
         isPlaying: room.isPlaying,
-        serverTime: Date.now()
+        serverTime: now
       });
     }
   });
