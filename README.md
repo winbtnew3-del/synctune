@@ -2,9 +2,10 @@
 
 **Listen to music together in real-time.** Create a room, share a 6-digit code, and enjoy perfectly synchronized audio with friends.
 
-![Node.js](https://img.shields.io/badge/Node.js-24-green?logo=node.js)
+![Node.js](https://img.shields.io/badge/Node.js-20-green?logo=node.js)
 ![Socket.IO](https://img.shields.io/badge/Socket.IO-4.7-blue?logo=socket.io)
 ![License](https://img.shields.io/badge/License-MIT-purple)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/winbtnew3-del/synctune)
 
 ## ✨ Features
 
