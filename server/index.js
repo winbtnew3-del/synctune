@@ -158,7 +158,21 @@ io.on('connection', (socket) => {
           memberCount: existing.members.size,
           members: getMemberList(existing)
         });
-        return callback({ success: true, code, role: 'host' });
+        return callback({
+          success: true,
+          code,
+          role: 'host',
+          state: {
+            currentTrack: existing.currentTrack,
+            isPlaying: existing.isPlaying,
+            currentTime: existing.currentTime,
+            serverTime: Date.now(),
+            memberCount: existing.members.size,
+            members: getMemberList(existing),
+            queue: existing.queue,
+            queueIndex: existing.queueIndex
+          }
+        });
       }
       return callback({ success: false, error: 'Room code already in use' });
     }
@@ -182,7 +196,21 @@ io.on('connection', (socket) => {
     socket.role = 'host';
     socket.userName = userName;
 
-    callback({ success: true, code, role: 'host' });
+    callback({
+      success: true,
+      code,
+      role: 'host',
+      state: {
+        currentTrack: room.currentTrack,
+        isPlaying: room.isPlaying,
+        currentTime: 0,
+        serverTime: Date.now(),
+        memberCount: room.members.size,
+        members: getMemberList(room),
+        queue: room.queue,
+        queueIndex: room.queueIndex
+      }
+    });
   });
 
   // ---------- Join Room ----------
@@ -506,17 +534,18 @@ io.on('connection', (socket) => {
     const userName = socket.userName || 'Someone';
     room.members.delete(socket.id);
 
+    // Immediately update all remaining listeners in the room
+    io.to(socket.roomCode).emit('member-update', {
+      memberCount: room.members.size,
+      members: getMemberList(room)
+    });
+    io.to(socket.roomCode).emit('user-left', { name: userName });
+
     if (socket.id === room.hostId) {
       room.hostDisconnectTimer = setTimeout(() => {
         io.to(socket.roomCode).emit('room-closed', { reason: 'Host has left the room.' });
         rooms.delete(socket.roomCode);
       }, 30000);
-    } else {
-      io.to(socket.roomCode).emit('member-update', {
-        memberCount: room.members.size,
-        members: getMemberList(room)
-      });
-      io.to(socket.roomCode).emit('user-left', { name: userName });
     }
   });
 });

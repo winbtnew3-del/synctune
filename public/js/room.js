@@ -226,11 +226,15 @@ function onRoomJoined(res) {
   if (res.state?.memberCount) {
     document.getElementById('member-count').textContent = res.state.memberCount;
     document.getElementById('header-member-count').textContent = res.state.memberCount;
+    const countBadge = document.getElementById('listeners-badge');
+    if (countBadge) countBadge.textContent = `${res.state.memberCount} online`;
   }
-  if (res.state?.members) {
+  if (res.state?.members && res.state.members.length > 0) {
     members = res.state.members;
-    renderMembersList();
+  } else {
+    members = [{ id: socket.id, name: userName, role: role }];
   }
+  renderMembersList();
   if (res.state?.queue) {
     queue = res.state.queue;
     queueIndex = res.state.queueIndex ?? -1;
@@ -446,37 +450,78 @@ if (collapseBtn) {
 }
 
 // =============================================
-// Members Panel
+// In-Room Active Listeners Display
 // =============================================
 
 function renderMembersList() {
-  const container = document.getElementById('members-list');
+  const container = document.getElementById('listeners-grid');
+  const countBadge = document.getElementById('listeners-badge');
+  const headerCount = document.getElementById('header-member-count');
+  const footerCount = document.getElementById('member-count');
+
+  const count = members.length || 1;
+  if (countBadge) countBadge.textContent = `${count} online`;
+  if (headerCount) headerCount.textContent = count;
+  if (footerCount) footerCount.textContent = count;
+
   if (!container) return;
 
-  container.innerHTML = members.map(m => `
-    <div class="member-item">
-      <div class="member-avatar">${m.name.charAt(0).toUpperCase()}</div>
-      <div class="member-info">
-        <span class="member-name">${m.name}</span>
-        <span class="member-role">${m.role === 'host' ? '👑 Host' : '🎧 Listener'}</span>
+  if (members.length === 0) {
+    const isCurrentHost = (role === 'host');
+    container.innerHTML = `
+      <div class="listener-chip is-you">
+        <div class="listener-avatar ${isCurrentHost ? 'host-avatar' : 'guest-avatar'}">
+          <span>${(userName || 'Y').charAt(0).toUpperCase()}</span>
+          <span class="avatar-status-dot"></span>
+        </div>
+        <div class="listener-details">
+          <div class="listener-name-row">
+            <span class="listener-name">${userName}</span>
+            <span class="you-tag">You</span>
+          </div>
+          <span class="listener-role ${isCurrentHost ? 'host-role' : 'guest-role'}">
+            ${isCurrentHost ? '👑 Host' : '🎧 Listener'}
+          </span>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+    return;
+  }
+
+  container.innerHTML = members.map(m => {
+    const isCurrentUser = (m.id === socket.id) || (m.name === userName && m.role === role);
+    const isHostMember = m.role === 'host';
+    const initial = (m.name || '?').charAt(0).toUpperCase();
+
+    return `
+      <div class="listener-chip ${isCurrentUser ? 'is-you' : ''}" data-id="${m.id || ''}">
+        <div class="listener-avatar ${isHostMember ? 'host-avatar' : 'guest-avatar'}">
+          <span>${initial}</span>
+          <span class="avatar-status-dot"></span>
+        </div>
+        <div class="listener-details">
+          <div class="listener-name-row">
+            <span class="listener-name" title="${m.name}">${m.name}</span>
+            ${isCurrentUser ? '<span class="you-tag">You</span>' : ''}
+          </div>
+          <span class="listener-role ${isHostMember ? 'host-role' : 'guest-role'}">
+            ${isHostMember ? '👑 Host' : '🎧 Listener'}
+          </span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 const membersToggle = document.getElementById('members-toggle-btn');
-const membersClose = document.getElementById('members-close-btn');
-
 if (membersToggle) {
   membersToggle.addEventListener('click', () => {
-    membersVisible = !membersVisible;
-    document.getElementById('members-panel').classList.toggle('hidden', !membersVisible);
-  });
-}
-if (membersClose) {
-  membersClose.addEventListener('click', () => {
-    membersVisible = false;
-    document.getElementById('members-panel').classList.add('hidden');
+    const sec = document.getElementById('listeners-section');
+    if (sec) {
+      sec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      sec.classList.add('section-highlight');
+      setTimeout(() => sec.classList.remove('section-highlight'), 1200);
+    }
   });
 }
 
@@ -714,12 +759,17 @@ socket.on('queue-ended', () => {
 socket.on('member-update', ({ memberCount, members: m }) => {
   document.getElementById('member-count').textContent = memberCount;
   document.getElementById('header-member-count').textContent = memberCount;
-  if (m) {
+  const countBadge = document.getElementById('listeners-badge');
+  if (countBadge) countBadge.textContent = `${memberCount} online`;
+
+  if (m && Array.isArray(m)) {
     members = m;
     renderMembersList();
   }
   if (isHost && memberCount > 1) {
     updateSyncStatus(`${memberCount} listeners in lockstep`, 'synced');
+  } else if (isHost) {
+    updateSyncStatus('Broadcasting • Master Clock', 'synced');
   }
 });
 

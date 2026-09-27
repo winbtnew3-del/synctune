@@ -60,6 +60,21 @@
       <span class="role-name" id="role-name"></span>
     </div>
 
+    <!-- Active In-Room Listeners (Always Visible) -->
+    <section id="listeners-section" class="listeners-section">
+      <div class="listeners-header">
+        <div class="listeners-title">
+          <span class="live-pulse-dot"></span>
+          <h3>In This Room</h3>
+          <span class="listeners-badge" id="listeners-badge">1 online</span>
+        </div>
+        <span class="listeners-subtext">Live Synced</span>
+      </div>
+      <div class="listeners-grid" id="listeners-grid">
+        <!-- Rendered in real-time -->
+      </div>
+    </section>
+
     <!-- Track Changed Notification Banner -->
     <div id="track-changed-banner" class="track-changed-banner hidden">
       <span id="track-changed-text"></span>
@@ -187,17 +202,6 @@
         <button class="queue-toggle-view" id="queue-collapse-btn">▼</button>
       </div>
       <div class="queue-list" id="queue-list">
-        <!-- Dynamically populated -->
-      </div>
-    </section>
-
-    <!-- Listeners Panel -->
-    <section id="members-panel" class="members-panel hidden">
-      <div class="members-header">
-        <h3>👥 Listeners</h3>
-        <button class="members-close-btn" id="members-close-btn">✕</button>
-      </div>
-      <div class="members-list" id="members-list">
         <!-- Dynamically populated -->
       </div>
     </section>
