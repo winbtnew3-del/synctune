@@ -1655,6 +1655,7 @@ nav a:hover, .nav-link:hover {
 }
 
 .sync-prompt-card {
+  position: relative;
   background: var(--bg-card-solid);
   border: 1px solid var(--border-hover);
   border-radius: var(--radius);
@@ -1662,6 +1663,29 @@ nav a:hover, .nav-link:hover {
   text-align: center;
   max-width: 360px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.sync-prompt-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: var(--text-2);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sync-prompt-close-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
 }
 
 .sync-prompt-icon {
@@ -1680,4 +1704,161 @@ nav a:hover, .nav-link:hover {
   font-size: 13px;
   margin-bottom: 20px;
   line-height: 1.5;
+}
+
+/* =============================================
+   Ujwal — Owner & Founder Branding Everywhere
+   ============================================= */
+
+/* Ambient Full-Screen Ujwal Watermark Background */
+.ujwal-bg-watermark {
+  position: fixed;
+  inset: 0;
+  background-image: 
+    radial-gradient(circle at 50% 30%, rgba(10, 10, 26, 0.84) 0%, rgba(10, 10, 26, 0.96) 80%),
+    url('/images/ujwal.jpg');
+  background-repeat: no-repeat;
+  background-position: center top;
+  background-size: cover;
+  opacity: 0.16;
+  pointer-events: none;
+  z-index: 0;
+  filter: contrast(1.1) saturate(0.9);
+}
+
+/* Header Ujwal Badge */
+.ujwal-creator-badge, .ujwal-room-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(6, 182, 212, 0.12));
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 24px;
+  padding: 4px 10px 4px 4px;
+  box-shadow: 0 2px 10px rgba(139, 92, 246, 0.2);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.ujwal-creator-badge:hover, .ujwal-room-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);
+}
+
+.ujwal-avatar-mini {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid var(--purple);
+}
+
+.ujwal-badge-text, .ujwal-badge-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* Hero Ujwal Founder Spotlight Card */
+.ujwal-founder-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(18, 18, 45, 0.7);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 40px;
+  padding: 6px 18px 6px 8px;
+  margin-bottom: 20px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.25);
+  animation: ujwal-glow 3s ease-in-out infinite;
+}
+
+@keyframes ujwal-glow {
+  0%, 100% { box-shadow: 0 4px 20px rgba(139, 92, 246, 0.25); border-color: rgba(139, 92, 246, 0.35); }
+  50% { box-shadow: 0 6px 28px rgba(6, 182, 212, 0.4); border-color: rgba(6, 182, 212, 0.5); }
+}
+
+.ujwal-avatar-container {
+  position: relative;
+  width: 46px;
+  height: 46px;
+}
+
+.ujwal-founder-photo {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--cyan);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.5);
+}
+
+.ujwal-crown-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 13px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+}
+
+.ujwal-founder-text {
+  text-align: left;
+}
+
+.ujwal-founder-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+.ujwal-founder-tag {
+  font-size: 11px;
+  color: var(--cyan);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+/* Home Footer Ujwal Badge */
+.ujwal-footer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 20px;
+  padding: 4px 12px 4px 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ujwal-footer-badge strong {
+  color: var(--purple);
+}
+
+/* Sync Footer Ujwal Center Badge */
+.sync-center-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ujwal-avatar-micro {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--purple);
 }

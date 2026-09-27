@@ -199,8 +199,8 @@ socket.on('connect', () => {
       if (res && res.success) {
         onRoomJoined(res);
       } else {
-        showToast(res?.error || 'Failed to create room', 'error');
-        setTimeout(() => window.location.href = '/', 2500);
+        // If room already exists, join it seamlessly
+        joinAsGuest();
       }
     });
   } else {
@@ -212,12 +212,9 @@ function joinAsGuest(retries = 0) {
   socket.emit('join-room', { code: roomCode, name: userName }, (res) => {
     if (res && res.success) {
       onRoomJoined(res);
-    } else if (retries < 10) {
-      updateSyncStatus('Connecting to room…', 'waiting');
-      setTimeout(() => joinAsGuest(retries + 1), 2000);
     } else {
-      showToast(res?.error || 'Room not found.', 'error');
-      setTimeout(() => window.location.href = '/', 2500);
+      updateSyncStatus('Connecting to room…', 'waiting');
+      setTimeout(() => joinAsGuest(retries + 1), 2500);
     }
   });
 }
@@ -459,14 +456,40 @@ function renderMembersList() {
   const headerCount = document.getElementById('header-member-count');
   const footerCount = document.getElementById('member-count');
 
-  const count = members.length || 1;
+  // Strict deduplication by unique clean name
+  const uniqueMembers = [];
+  const seen = new Set();
+
+  // Host first
+  for (const m of members) {
+    if (m.role === 'host') {
+      const key = (m.name || 'Host').trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueMembers.push(m);
+      }
+    }
+  }
+
+  // Then other listeners
+  for (const m of members) {
+    if (m.role !== 'host') {
+      const key = (m.name || 'Anonymous').trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueMembers.push(m);
+      }
+    }
+  }
+
+  const count = uniqueMembers.length || 1;
   if (countBadge) countBadge.textContent = `${count} online`;
   if (headerCount) headerCount.textContent = count;
   if (footerCount) footerCount.textContent = count;
 
   if (!container) return;
 
-  if (members.length === 0) {
+  if (uniqueMembers.length === 0) {
     const isCurrentHost = (role === 'host');
     container.innerHTML = `
       <div class="listener-chip is-you">
@@ -488,8 +511,8 @@ function renderMembersList() {
     return;
   }
 
-  container.innerHTML = members.map(m => {
-    const isCurrentUser = (m.id === socket.id) || (m.name === userName && m.role === role);
+  container.innerHTML = uniqueMembers.map(m => {
+    const isCurrentUser = (m.id === socket.id) || (m.name && m.name.trim().toLowerCase() === userName.trim().toLowerCase());
     const isHostMember = m.role === 'host';
     const initial = (m.name || '?').charAt(0).toUpperCase();
 
@@ -782,9 +805,26 @@ socket.on('user-left', ({ name }) => {
   showToast(`👋 ${name} left the room`);
 });
 
+socket.on('role-changed', ({ role: newRole }) => {
+  if (newRole === 'host') {
+    showToast('👑 You are now the host of this room!');
+    document.getElementById('role-icon').textContent = '👑';
+    document.getElementById('role-label').textContent = 'Host';
+    const badge = document.getElementById('role-badge');
+    if (badge) badge.className = 'role-badge host';
+    startHostBroadcast();
+  }
+});
+
 socket.on('room-closed', ({ reason }) => {
-  showToast(reason || 'Room closed.', 'error');
-  setTimeout(() => window.location.href = '/', 2500);
+  showToast(reason || 'Reconnecting...', 'error');
+  setTimeout(() => {
+    if (socket.connected) {
+      socket.emit('join-room', { code: roomCode, name: userName }, (res) => {
+        if (res && res.success) onRoomJoined(res);
+      });
+    }
+  }, 2000);
 });
 
 // =============================================
@@ -938,12 +978,16 @@ setInterval(() => {
 // Mobile Prompt & Helpers
 // =============================================
 
+let promptDismissedByUser = false;
+
 function showMobileSyncPrompt() {
+  if (promptDismissedByUser || isUnlocked) return;
   const overlay = document.getElementById('sync-prompt-overlay');
   if (overlay) overlay.classList.remove('hidden');
 }
 
 function hideMobileSyncPrompt() {
+  promptDismissedByUser = true;
   const overlay = document.getElementById('sync-prompt-overlay');
   if (overlay) overlay.classList.add('hidden');
 }
@@ -951,6 +995,7 @@ function hideMobileSyncPrompt() {
 const syncBtn = document.getElementById('sync-prompt-btn');
 if (syncBtn) {
   syncBtn.addEventListener('click', () => {
+    hideMobileSyncPrompt();
     unlockBackgroundAudio();
     if (ytPlayer && ytReady) ytPlayer.playVideo();
     if (!isHost && socket.connected) {
@@ -958,6 +1003,18 @@ if (syncBtn) {
         if (state && ytPlayer && ytReady && state.isPlaying) syncGuestToTime(state.currentTime, state.serverTime);
       });
     }
+  });
+}
+
+const closePromptBtn = document.getElementById('sync-prompt-close');
+if (closePromptBtn) {
+  closePromptBtn.addEventListener('click', hideMobileSyncPrompt);
+}
+
+const syncOverlay = document.getElementById('sync-prompt-overlay');
+if (syncOverlay) {
+  syncOverlay.addEventListener('click', (e) => {
+    if (e.target === syncOverlay) hideMobileSyncPrompt();
   });
 }
 

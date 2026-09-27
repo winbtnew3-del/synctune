@@ -10,6 +10,9 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 </head>
 <body>
+  <!-- Ambient Ujwal Watermark Background -->
+  <div class="ujwal-bg-watermark"></div>
+
   <!-- 3D Particles Background -->
   <canvas id="particles-bg"></canvas>
 
@@ -34,6 +37,12 @@
         </svg>
         <span class="logo-text">SyncTune</span>
       </a>
+
+      <!-- Ujwal Owner Pill -->
+      <div class="ujwal-room-badge" title="Website Owner: Ujwal">
+        <img src="/images/ujwal.jpg" alt="Ujwal" class="ujwal-avatar-mini">
+        <span class="ujwal-badge-name">Owner: Ujwal</span>
+      </div>
 
       <div class="room-code-badge" id="room-code-badge">
         <span class="badge-icon">♪</span>
@@ -232,6 +241,10 @@
       <span class="sync-dot-footer" id="sync-dot-footer"></span>
       <span id="sync-text">Connecting…</span>
     </div>
+    <div class="sync-center-owner">
+      <img src="/images/ujwal.jpg" alt="Ujwal" class="ujwal-avatar-micro">
+      <span>Owner: Ujwal</span>
+    </div>
     <div class="sync-right">
       <span>👥</span>
       <span id="member-count">1</span>/<span id="max-members">30</span>
@@ -247,6 +260,7 @@
   <!-- Mobile Autoplay Unlock Banner -->
   <div id="sync-prompt-overlay" class="sync-prompt-overlay hidden">
     <div class="sync-prompt-card">
+      <button id="sync-prompt-close" class="sync-prompt-close-btn" title="Close">✕</button>
       <div class="sync-prompt-icon">🎧</div>
       <h3>Tap to Start Listening</h3>
       <p>Tap below to start listening in perfect sync with the room.</p>

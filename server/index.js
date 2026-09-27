@@ -83,11 +83,27 @@ function fetchOEmbed(videoId) {
   });
 }
 
-// Helper: get member list with names
+// Helper: get member list with names (deduplicated by name)
 function getMemberList(room) {
   const list = [];
+  const seen = new Set();
+
+  // Host first if present
+  if (room.hostId && room.members.has(room.hostId)) {
+    const host = room.members.get(room.hostId);
+    const hostName = (host.name || 'Host').trim();
+    seen.add(hostName.toLowerCase());
+    list.push({ id: room.hostId, name: hostName, role: 'host' });
+  }
+
   for (const [sid, m] of room.members) {
-    list.push({ id: sid, name: m.name || 'Anonymous', role: m.role });
+    if (sid === room.hostId) continue;
+    const name = (m.name || 'Anonymous').trim();
+    const nameKey = name.toLowerCase();
+    if (!seen.has(nameKey)) {
+      seen.add(nameKey);
+      list.push({ id: sid, name, role: m.role || 'guest' });
+    }
   }
   return list;
 }
@@ -147,34 +163,47 @@ io.on('connection', (socket) => {
       if (existing.hostDisconnectTimer) {
         clearTimeout(existing.hostDisconnectTimer);
         existing.hostDisconnectTimer = null;
-        existing.hostId = socket.id;
-        existing.members.set(socket.id, { role: 'host', name: userName, joinedAt: Date.now() });
-        socket.join(code);
-        socket.roomCode = code;
-        socket.role = 'host';
-        socket.userName = userName;
-
-        io.to(code).emit('member-update', {
-          memberCount: existing.members.size,
-          members: getMemberList(existing)
-        });
-        return callback({
-          success: true,
-          code,
-          role: 'host',
-          state: {
-            currentTrack: existing.currentTrack,
-            isPlaying: existing.isPlaying,
-            currentTime: existing.currentTime,
-            serverTime: Date.now(),
-            memberCount: existing.members.size,
-            members: getMemberList(existing),
-            queue: existing.queue,
-            queueIndex: existing.queueIndex
-          }
-        });
       }
-      return callback({ success: false, error: 'Room code already in use' });
+      existing.hostId = socket.id;
+
+      // Clean up any stale sockets with the same name to avoid duplicates
+      const cleanName = userName.trim().toLowerCase();
+      for (const [sid, m] of existing.members) {
+        if (m.name && m.name.trim().toLowerCase() === cleanName && sid !== socket.id) {
+          existing.members.delete(sid);
+        }
+      }
+
+      existing.members.set(socket.id, { role: 'host', name: userName, joinedAt: Date.now() });
+      socket.join(code);
+      socket.roomCode = code;
+      socket.role = 'host';
+      socket.userName = userName;
+
+      let currentTime = existing.currentTime;
+      if (existing.isPlaying) {
+        currentTime += Math.max(0, (Date.now() - existing.lastUpdate) / 1000);
+      }
+
+      io.to(code).emit('member-update', {
+        memberCount: existing.members.size,
+        members: getMemberList(existing)
+      });
+      return callback({
+        success: true,
+        code,
+        role: 'host',
+        state: {
+          currentTrack: existing.currentTrack,
+          isPlaying: existing.isPlaying,
+          currentTime,
+          serverTime: Date.now(),
+          memberCount: existing.members.size,
+          members: getMemberList(existing),
+          queue: existing.queue,
+          queueIndex: existing.queueIndex
+        }
+      });
     }
 
     const room = {
@@ -221,6 +250,14 @@ io.on('connection', (socket) => {
 
     if (!room) return callback({ success: false, error: 'Room not found. Check the code.' });
     if (room.members.size >= 30) return callback({ success: false, error: 'Room is full (max 30).' });
+
+    // Clean up any stale sockets with the same name to avoid duplicates
+    const cleanName = userName.trim().toLowerCase();
+    for (const [sid, m] of room.members) {
+      if (m.name && m.name.trim().toLowerCase() === cleanName && sid !== socket.id) {
+        room.members.delete(sid);
+      }
+    }
 
     room.members.set(socket.id, { role: 'guest', name: userName, joinedAt: Date.now() });
     socket.join(code);
@@ -542,10 +579,25 @@ io.on('connection', (socket) => {
     io.to(socket.roomCode).emit('user-left', { name: userName });
 
     if (socket.id === room.hostId) {
-      room.hostDisconnectTimer = setTimeout(() => {
-        io.to(socket.roomCode).emit('room-closed', { reason: 'Host has left the room.' });
-        rooms.delete(socket.roomCode);
-      }, 30000);
+      // If there are other members in the room, promote next member to host so room stays alive!
+      if (room.members.size > 0) {
+        const [nextSid, nextM] = room.members.entries().next().value;
+        room.hostId = nextSid;
+        nextM.role = 'host';
+        io.to(socket.roomCode).emit('member-update', {
+          memberCount: room.members.size,
+          members: getMemberList(room)
+        });
+        io.to(nextSid).emit('role-changed', { role: 'host' });
+      } else {
+        // Room is empty - keep alive for 2 hours in case members reconnect
+        if (room.hostDisconnectTimer) clearTimeout(room.hostDisconnectTimer);
+        room.hostDisconnectTimer = setTimeout(() => {
+          if (room.members.size === 0) {
+            rooms.delete(socket.roomCode);
+          }
+        }, 2 * 60 * 60 * 1000);
+      }
     }
   });
 });
