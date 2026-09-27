@@ -1,10 +1,12 @@
 // =============================================
 // SyncTune — Ultra-Low Latency (<50ms) Pure Audio Engine
+// With Spotify-like Queue, Member Names, 3D Animations
 // =============================================
 
 const params = new URLSearchParams(window.location.search);
 const roomCode = (params.get('code') || '').toUpperCase().trim();
 const role = params.get('role') || 'guest';
+const userName = decodeURIComponent(params.get('name') || (role === 'host' ? 'Host' : 'Listener'));
 
 if (!roomCode) {
   window.location.href = '/';
@@ -26,6 +28,11 @@ let lastKnownDuration = 0;
 let isUnlocked = false;
 let lastHardSeekTimestamp = 0;
 let currentPlaybackRate = 1.0;
+let queue = [];
+let queueIndex = -1;
+let queueCollapsed = false;
+let membersVisible = false;
+let members = [];
 
 // =============================================
 // NTP Clock Synchronization (±5ms accuracy)
@@ -39,17 +46,12 @@ function syncClock(samplesRemaining = 6) {
     if (!res) return;
     const t2 = Date.now();
     const rtt = t2 - res.clientT0;
-
-    // Use lowest RTT sample for least jitter / queue delay
     if (rtt < minRtt) {
       minRtt = rtt;
       serverClockOffset = (res.serverT1 + (rtt / 2)) - t2;
     }
-
     if (samplesRemaining > 1) {
       setTimeout(() => syncClock(samplesRemaining - 1), 120);
-    } else {
-      console.log(`[SyncTune NTP] Clock aligned. RTT: ${minRtt}ms, Skew: ${serverClockOffset}ms`);
     }
   });
 }
@@ -60,19 +62,20 @@ function getServerTime() {
 
 // UI Badges
 document.getElementById('header-room-code').textContent = roomCode;
+document.getElementById('role-name').textContent = userName;
 
 if (isHost) {
   document.getElementById('role-icon').textContent = '👑';
   document.getElementById('role-label').textContent = 'Host';
   document.getElementById('role-badge').classList.add('host');
   document.getElementById('empty-title').textContent = 'Paste a YouTube link above';
-  document.getElementById('empty-subtitle').textContent = 'Audio will stream in sub-50ms synchronized lockstep across all devices';
+  document.getElementById('empty-subtitle').textContent = 'Build a queue — tracks play one after another';
 } else {
   document.getElementById('role-icon').textContent = '🎧';
   document.getElementById('role-label').textContent = 'Guest';
   document.getElementById('role-badge').classList.add('guest');
   document.getElementById('empty-title').textContent = 'Waiting for music to start...';
-  document.getElementById('empty-subtitle').textContent = 'Audio will start automatically in perfect sub-50ms sync';
+  document.getElementById('empty-subtitle').textContent = 'Tracks will play automatically in perfect sync';
 }
 
 // =============================================
@@ -82,11 +85,7 @@ if (isHost) {
 function unlockBackgroundAudio() {
   if (isUnlocked) return;
   isUnlocked = true;
-
-  if (bgAudioKeeper) {
-    bgAudioKeeper.play().catch(() => {});
-  }
-
+  if (bgAudioKeeper) bgAudioKeeper.play().catch(() => {});
   hideMobileSyncPrompt();
 }
 
@@ -95,7 +94,6 @@ window.addEventListener('touchstart', unlockBackgroundAudio, { once: true });
 
 function updateMediaSession(track) {
   if (!('mediaSession' in navigator)) return;
-
   navigator.mediaSession.metadata = new MediaMetadata({
     title: track.title || 'SyncTune Audio',
     artist: track.artist || 'YouTube Music',
@@ -107,22 +105,10 @@ function updateMediaSession(track) {
       { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' }
     ]
   });
-
-  navigator.mediaSession.setActionHandler('play', () => {
-    handlePlayPauseAction(true);
-  });
-
-  navigator.mediaSession.setActionHandler('pause', () => {
-    handlePlayPauseAction(false);
-  });
-
-  navigator.mediaSession.setActionHandler('seekto', (details) => {
-    if (details.seekTime !== undefined && ytPlayer && ytReady) {
-      ytPlayer.seekTo(details.seekTime, true);
-      const scheduledTime = getServerTime() + 100;
-      socket.emit('seek', { currentTime: details.seekTime, scheduledServerTime: scheduledTime });
-    }
-  });
+  navigator.mediaSession.setActionHandler('play', () => handlePlayPauseAction(true));
+  navigator.mediaSession.setActionHandler('pause', () => handlePlayPauseAction(false));
+  navigator.mediaSession.setActionHandler('nexttrack', () => socket.emit('queue-next'));
+  navigator.mediaSession.setActionHandler('previoustrack', () => socket.emit('queue-prev'));
 }
 
 // =============================================
@@ -139,7 +125,6 @@ if (window.YT && window.YT.Player) {
 
 function initYouTubeAudioEngine() {
   if (ytPlayer || !window.YT || !window.YT.Player) return;
-
   ytPlayer = new YT.Player('yt-player', {
     height: '100%',
     width: '100%',
@@ -165,46 +150,41 @@ function initYouTubeAudioEngine() {
 
 function onPlayerReady() {
   ytReady = true;
-  console.log('[SyncTune] YouTube audio engine ready');
   startProgressTracker();
-
-  if (currentTrack) {
-    applyTrackToEngine(currentTrack);
-  }
+  if (currentTrack) applyTrackToEngine(currentTrack);
 }
 
 function onPlayerStateChange(event) {
   const state = event.data;
-
-  // YT.PlayerState.PLAYING = 1
-  // YT.PlayerState.PAUSED = 2
-  // YT.PlayerState.ENDED = 0
-
-  if (state === 1) { // Playing
+  if (state === 1) {
     updatePlayButton(true);
+    toggleDiscSpin(true);
     const dur = ytPlayer.getDuration() || 0;
     if (dur > 0) {
       lastKnownDuration = dur;
       document.getElementById('total-time').textContent = formatTime(dur);
     }
     hideMobileSyncPrompt();
-  } else if (state === 2) { // Paused
+  } else if (state === 2) {
     updatePlayButton(false);
-  } else if (state === 0) { // Ended
+    toggleDiscSpin(false);
+  } else if (state === 0) {
+    // Track ended
+    toggleDiscSpin(false);
     if (isLooping && ytPlayer) {
       ytPlayer.seekTo(0, true);
       ytPlayer.playVideo();
-    } else {
-      updatePlayButton(false);
-      socket.emit('play-pause', { isPlaying: false, currentTime: lastKnownDuration });
+    } else if (isHost) {
+      // Auto-advance queue
+      socket.emit('track-ended');
     }
   }
 }
 
 function onPlayerError(e) {
-  console.warn('[SyncTune] Audio notice:', e.data);
   if (e.data === 150 || e.data === 101) {
-    showToast('This track has playback restrictions. Please paste another link!', 'error');
+    showToast('This track has playback restrictions. Skipping...', 'error');
+    if (isHost) setTimeout(() => socket.emit('queue-next'), 1500);
   }
 }
 
@@ -213,11 +193,9 @@ function onPlayerError(e) {
 // =============================================
 
 socket.on('connect', () => {
-  console.log('[SyncTune] Connected to server, socket:', socket.id);
   syncClock();
-
   if (isHost) {
-    socket.emit('create-room', { code: roomCode }, (res) => {
+    socket.emit('create-room', { code: roomCode, name: userName }, (res) => {
       if (res && res.success) {
         onRoomJoined(res);
       } else {
@@ -231,7 +209,7 @@ socket.on('connect', () => {
 });
 
 function joinAsGuest(retries = 0) {
-  socket.emit('join-room', { code: roomCode }, (res) => {
+  socket.emit('join-room', { code: roomCode, name: userName }, (res) => {
     if (res && res.success) {
       onRoomJoined(res);
     } else if (retries < 10) {
@@ -245,10 +223,18 @@ function joinAsGuest(retries = 0) {
 }
 
 function onRoomJoined(res) {
-  console.log('[SyncTune] Joined room:', res.code);
-
   if (res.state?.memberCount) {
     document.getElementById('member-count').textContent = res.state.memberCount;
+    document.getElementById('header-member-count').textContent = res.state.memberCount;
+  }
+  if (res.state?.members) {
+    members = res.state.members;
+    renderMembersList();
+  }
+  if (res.state?.queue) {
+    queue = res.state.queue;
+    queueIndex = res.state.queueIndex ?? -1;
+    renderQueue();
   }
 
   if (isHost) {
@@ -265,7 +251,7 @@ function onRoomJoined(res) {
 }
 
 // =============================================
-// Track Loading
+// Track Loading & Queue Management
 // =============================================
 
 const loadBtn = document.getElementById('load-track-btn');
@@ -287,7 +273,7 @@ async function handleLoadTrack() {
   }
 
   loadBtn.disabled = true;
-  loadBtn.textContent = '⏳ Loading...';
+  loadBtn.textContent = '⏳ Adding...';
 
   try {
     const res = await fetch(`/api/info/${videoId}`);
@@ -301,9 +287,13 @@ async function handleLoadTrack() {
       duration: info.duration || 0
     };
 
-    setTrack(trackData);
-    socket.emit('change-track', trackData);
-    showToast(`🎵 Loaded: ${trackData.title}`);
+    // Add to queue via server
+    socket.emit('queue-add', trackData, (res) => {
+      if (res?.success) {
+        showToast(`🎵 Added: ${trackData.title}`);
+        urlInput.value = '';
+      }
+    });
   } catch (err) {
     console.error('[Track Load Error]', err);
     const fallback = {
@@ -313,30 +303,34 @@ async function handleLoadTrack() {
       thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       duration: 0
     };
-    setTrack(fallback);
-    socket.emit('change-track', fallback);
+    socket.emit('queue-add', fallback);
+    urlInput.value = '';
   } finally {
     loadBtn.disabled = false;
     loadBtn.innerHTML = `
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="2" y="2" width="20" height="20" rx="2"/>
-        <polygon points="10,8 16,12 10,16" fill="currentColor"/>
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
-      Change Track`;
+      Add to Queue`;
   }
 }
 
 function setTrack(trackData) {
   currentTrack = trackData;
-
   document.getElementById('track-title').textContent = trackData.title;
   document.getElementById('track-artist').textContent = trackData.artist;
   document.getElementById('track-thumbnail').src = trackData.thumbnail;
   document.getElementById('mini-title').textContent = trackData.title;
 
+  if (trackData.addedBy) {
+    document.getElementById('track-added-by').textContent = `Added by ${trackData.addedBy}`;
+  }
+
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('now-playing').classList.remove('hidden');
   document.getElementById('player-controls').classList.remove('hidden');
+  document.getElementById('queue-section').classList.remove('hidden');
 
   updateMediaSession(trackData);
   applyTrackToEngine(trackData, 0, true);
@@ -344,15 +338,19 @@ function setTrack(trackData) {
 
 function loadTrack(trackData, startTime = 0, autoPlay = true) {
   currentTrack = trackData;
-
   document.getElementById('track-title').textContent = trackData.title;
   document.getElementById('track-artist').textContent = trackData.artist;
   document.getElementById('track-thumbnail').src = trackData.thumbnail;
   document.getElementById('mini-title').textContent = trackData.title;
 
+  if (trackData.addedBy) {
+    document.getElementById('track-added-by').textContent = `Added by ${trackData.addedBy}`;
+  }
+
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('now-playing').classList.remove('hidden');
   document.getElementById('player-controls').classList.remove('hidden');
+  document.getElementById('queue-section').classList.remove('hidden');
 
   updateMediaSession(trackData);
   applyTrackToEngine(trackData, startTime, autoPlay);
@@ -363,31 +361,19 @@ function applyTrackToEngine(trackData, startTime = 0, autoPlay = true) {
     setTimeout(() => applyTrackToEngine(trackData, startTime, autoPlay), 150);
     return;
   }
-
   unlockBackgroundAudio();
-
   try {
     if (autoPlay) {
-      ytPlayer.loadVideoById({
-        videoId: trackData.videoId,
-        startSeconds: startTime || 0
-      });
+      ytPlayer.loadVideoById({ videoId: trackData.videoId, startSeconds: startTime || 0 });
       updatePlayButton(true);
-
-      // Mobile autoplay policy safeguard: show tap banner if sound blocked
       setTimeout(() => {
         if (ytPlayer && ytReady) {
           const state = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-          if (state !== 1 && state !== 3) {
-            showMobileSyncPrompt();
-          }
+          if (state !== 1 && state !== 3) showMobileSyncPrompt();
         }
       }, 1200);
     } else {
-      ytPlayer.cueVideoById({
-        videoId: trackData.videoId,
-        startSeconds: startTime || 0
-      });
+      ytPlayer.cueVideoById({ videoId: trackData.videoId, startSeconds: startTime || 0 });
       updatePlayButton(false);
     }
   } catch (err) {
@@ -396,7 +382,126 @@ function applyTrackToEngine(trackData, startTime = 0, autoPlay = true) {
 }
 
 // =============================================
-// Synchronized Future-Rendezvous Play/Pause (<50ms)
+// Queue UI Rendering (Spotify-like)
+// =============================================
+
+function renderQueue() {
+  const container = document.getElementById('queue-list');
+  const countEl = document.getElementById('queue-count');
+  if (!container) return;
+
+  countEl.textContent = `${queue.length} track${queue.length !== 1 ? 's' : ''}`;
+
+  if (queue.length === 0) {
+    container.innerHTML = '<div class="queue-empty">No tracks in queue. Add a YouTube link above!</div>';
+    return;
+  }
+
+  container.innerHTML = queue.map((item, idx) => {
+    const isActive = idx === queueIndex;
+    const isPast = idx < queueIndex;
+    return `
+      <div class="queue-item ${isActive ? 'queue-item-active' : ''} ${isPast ? 'queue-item-past' : ''}" data-id="${item.id}">
+        <div class="queue-item-number">${isActive ? '▶' : idx + 1}</div>
+        <img class="queue-item-thumb" src="${item.thumbnail}" alt="" loading="lazy">
+        <div class="queue-item-info">
+          <div class="queue-item-title">${item.title}</div>
+          <div class="queue-item-artist">${item.artist} • ${item.addedBy || 'Unknown'}</div>
+        </div>
+        ${!isActive ? `<button class="queue-item-remove" data-remove="${item.id}" title="Remove">✕</button>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Click to play
+  container.querySelectorAll('.queue-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.queue-item-remove')) return;
+      const id = el.dataset.id;
+      socket.emit('queue-play', id);
+    });
+  });
+
+  // Remove button
+  container.querySelectorAll('.queue-item-remove').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.remove;
+      socket.emit('queue-remove', id);
+    });
+  });
+
+  // Show queue section
+  document.getElementById('queue-section').classList.remove('hidden');
+}
+
+// Queue collapse toggle
+const collapseBtn = document.getElementById('queue-collapse-btn');
+if (collapseBtn) {
+  collapseBtn.addEventListener('click', () => {
+    queueCollapsed = !queueCollapsed;
+    document.getElementById('queue-list').classList.toggle('queue-collapsed', queueCollapsed);
+    collapseBtn.textContent = queueCollapsed ? '▶' : '▼';
+  });
+}
+
+// =============================================
+// Members Panel
+// =============================================
+
+function renderMembersList() {
+  const container = document.getElementById('members-list');
+  if (!container) return;
+
+  container.innerHTML = members.map(m => `
+    <div class="member-item">
+      <div class="member-avatar">${m.name.charAt(0).toUpperCase()}</div>
+      <div class="member-info">
+        <span class="member-name">${m.name}</span>
+        <span class="member-role">${m.role === 'host' ? '👑 Host' : '🎧 Listener'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+const membersToggle = document.getElementById('members-toggle-btn');
+const membersClose = document.getElementById('members-close-btn');
+
+if (membersToggle) {
+  membersToggle.addEventListener('click', () => {
+    membersVisible = !membersVisible;
+    document.getElementById('members-panel').classList.toggle('hidden', !membersVisible);
+  });
+}
+if (membersClose) {
+  membersClose.addEventListener('click', () => {
+    membersVisible = false;
+    document.getElementById('members-panel').classList.add('hidden');
+  });
+}
+
+// =============================================
+// Track Changed Banner
+// =============================================
+
+function showTrackChangedBanner(changedBy, trackTitle) {
+  const banner = document.getElementById('track-changed-banner');
+  const text = document.getElementById('track-changed-text');
+  if (!banner || !text) return;
+
+  text.textContent = `🎵 ${changedBy} is now playing: ${trackTitle}`;
+  banner.classList.remove('hidden');
+  banner.classList.add('banner-animate');
+
+  clearTimeout(banner._timer);
+  banner._timer = setTimeout(() => {
+    banner.classList.add('hidden');
+    banner.classList.remove('banner-animate');
+  }, 4000);
+}
+
+// =============================================
+// Synchronized Play/Pause (<50ms)
 // =============================================
 
 document.getElementById('play-pause-btn').addEventListener('click', () => {
@@ -407,11 +512,9 @@ document.getElementById('play-pause-btn').addEventListener('click', () => {
 
 function handlePlayPauseAction(play) {
   if (!ytPlayer || !ytReady) return;
-
   unlockBackgroundAudio();
-
   const curPos = ytPlayer.getCurrentTime() || 0;
-  const targetServerTime = getServerTime() + 100; // 100ms rendezvous
+  const targetServerTime = getServerTime() + 100;
 
   if (play) {
     const delay = Math.max(0, targetServerTime - getServerTime());
@@ -419,29 +522,28 @@ function handlePlayPauseAction(play) {
       ytPlayer.playVideo();
       updatePlayButton(true);
     }, delay);
-
-    socket.emit('play-pause', {
-      isPlaying: true,
-      currentTime: curPos,
-      scheduledServerTime: targetServerTime
-    });
+    socket.emit('play-pause', { isPlaying: true, currentTime: curPos, scheduledServerTime: targetServerTime });
   } else {
     ytPlayer.pauseVideo();
     updatePlayButton(false);
-    socket.emit('play-pause', {
-      isPlaying: false,
-      currentTime: curPos,
-      scheduledServerTime: getServerTime()
-    });
+    socket.emit('play-pause', { isPlaying: false, currentTime: curPos, scheduledServerTime: getServerTime() });
   }
 }
 
-// Skip Back / Restart
+// Skip Back / Previous
 document.getElementById('skip-back-btn').addEventListener('click', () => {
   if (!ytPlayer || !ytReady) return;
-  const targetServerTime = getServerTime() + 100;
-  ytPlayer.seekTo(0, true);
-  socket.emit('seek', { currentTime: 0, scheduledServerTime: targetServerTime });
+  if (queue.length > 0) {
+    socket.emit('queue-prev');
+  } else {
+    ytPlayer.seekTo(0, true);
+    socket.emit('seek', { currentTime: 0 });
+  }
+});
+
+// Skip Next
+document.getElementById('skip-next-btn').addEventListener('click', () => {
+  socket.emit('queue-next');
 });
 
 // Loop
@@ -471,10 +573,7 @@ document.getElementById('volume-btn').addEventListener('click', () => {
 
 const progressBar = document.getElementById('progress-bar');
 
-progressBar.addEventListener('click', (e) => {
-  seekToPosition(e.clientX);
-});
-
+progressBar.addEventListener('click', (e) => seekToPosition(e.clientX));
 progressBar.addEventListener('mousedown', () => { isSeeking = true; });
 document.addEventListener('mousemove', (e) => { if (isSeeking) seekToPosition(e.clientX); });
 document.addEventListener('mouseup', endSeek);
@@ -483,11 +582,9 @@ progressBar.addEventListener('touchstart', (e) => {
   isSeeking = true;
   seekToPosition(e.touches[0].clientX);
 }, { passive: true });
-
 document.addEventListener('touchmove', (e) => {
   if (isSeeking && e.touches[0]) seekToPosition(e.touches[0].clientX);
 }, { passive: true });
-
 document.addEventListener('touchend', endSeek);
 
 function seekToPosition(clientX) {
@@ -496,7 +593,6 @@ function seekToPosition(clientX) {
   const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
   const dur = ytPlayer.getDuration() || lastKnownDuration || 1;
   const targetTime = pct * dur;
-
   ytPlayer.seekTo(targetTime, true);
   updateProgressBar(targetTime, dur);
 }
@@ -504,18 +600,15 @@ function seekToPosition(clientX) {
 function endSeek() {
   if (isSeeking && ytPlayer) {
     const cur = ytPlayer.getCurrentTime() || 0;
-    const targetServerTime = getServerTime() + 100;
-    socket.emit('seek', { currentTime: cur, scheduledServerTime: targetServerTime });
+    socket.emit('seek', { currentTime: cur });
   }
   isSeeking = false;
 }
 
 function startProgressTracker() {
   if (progressUpdateTimer) clearInterval(progressUpdateTimer);
-
   progressUpdateTimer = setInterval(() => {
     if (!ytPlayer || !ytReady || isSeeking) return;
-
     try {
       const cur = ytPlayer.getCurrentTime() || 0;
       const dur = ytPlayer.getDuration() || lastKnownDuration || 0;
@@ -542,32 +635,47 @@ function updatePlayButton(playing) {
   document.getElementById('play-icon').classList.toggle('hidden', playing);
   document.getElementById('pause-icon').classList.toggle('hidden', !playing);
   document.getElementById('mini-play-icon').textContent = playing ? '⏸' : '▶';
-
   document.querySelectorAll('#waveform span').forEach(bar => {
     bar.style.animationPlayState = playing ? 'running' : 'paused';
   });
 }
 
 // =============================================
+// 3D Spinning Disc
+// =============================================
+
+function toggleDiscSpin(playing) {
+  const disc = document.getElementById('spinning-disc');
+  if (disc) {
+    disc.classList.toggle('spinning', playing);
+  }
+}
+
+// =============================================
 // Synchronized Event Handlers (<50ms Precision)
 // =============================================
 
-socket.on('track-changed', ({ track, currentTime, isPlaying, serverTime }) => {
+socket.on('track-changed', ({ track, currentTime, isPlaying, serverTime, changedBy, queueIndex: qi }) => {
   const elapsed = Math.max(0, (getServerTime() - serverTime) / 1000);
+  if (qi !== undefined) queueIndex = qi;
+
   loadTrack(track, currentTime + elapsed, isPlaying !== false);
+  renderQueue();
+
+  if (changedBy) {
+    showTrackChangedBanner(changedBy, track.title);
+  }
   showToast(`🎵 Now playing: ${track.title}`);
+  spawnMusicNote();
 });
 
 socket.on('sync-playback', ({ isPlaying, currentTime, scheduledServerTime }) => {
   if (!ytPlayer || !ytReady) return;
-
   if (isPlaying) {
     const delay = Math.max(0, scheduledServerTime - getServerTime());
     setTimeout(() => {
       const myPos = ytPlayer.getCurrentTime() || 0;
-      if (Math.abs(myPos - currentTime) > 0.8) {
-        ytPlayer.seekTo(currentTime, true);
-      }
+      if (Math.abs(myPos - currentTime) > 0.8) ytPlayer.seekTo(currentTime, true);
       ytPlayer.playVideo();
       updatePlayButton(true);
     }, delay);
@@ -577,27 +685,51 @@ socket.on('sync-playback', ({ isPlaying, currentTime, scheduledServerTime }) => 
   }
 });
 
-socket.on('sync-seek', ({ currentTime, isPlaying, scheduledServerTime }) => {
+socket.on('sync-seek', ({ currentTime, isPlaying, serverTime }) => {
   if (!ytPlayer || !ytReady) return;
-
-  const delay = Math.max(0, scheduledServerTime - getServerTime());
-  setTimeout(() => {
-    ytPlayer.seekTo(currentTime, true);
-    if (isPlaying) ytPlayer.playVideo();
-  }, delay);
+  ytPlayer.seekTo(currentTime, true);
+  if (isPlaying) ytPlayer.playVideo();
 });
 
-// Host's real-time position broadcast received by guests
 socket.on('time-sync-update', ({ currentTime, serverTime }) => {
   if (isHost) return;
   syncGuestToTime(currentTime, serverTime);
 });
 
-socket.on('member-update', ({ memberCount }) => {
+socket.on('queue-updated', ({ queue: q, queueIndex: qi, addedBy, addedTrack }) => {
+  queue = q;
+  if (qi !== undefined) queueIndex = qi;
+  renderQueue();
+  if (addedBy && addedTrack) {
+    showToast(`🎵 ${addedBy} added: ${addedTrack}`);
+  }
+});
+
+socket.on('queue-ended', () => {
+  updatePlayButton(false);
+  toggleDiscSpin(false);
+  showToast('📋 Queue finished! Add more tracks.');
+});
+
+socket.on('member-update', ({ memberCount, members: m }) => {
   document.getElementById('member-count').textContent = memberCount;
+  document.getElementById('header-member-count').textContent = memberCount;
+  if (m) {
+    members = m;
+    renderMembersList();
+  }
   if (isHost && memberCount > 1) {
     updateSyncStatus(`${memberCount} listeners in lockstep`, 'synced');
   }
+});
+
+socket.on('user-joined', ({ name }) => {
+  showToast(`👋 ${name} joined the room`);
+  spawnMusicNote();
+});
+
+socket.on('user-left', ({ name }) => {
+  showToast(`👋 ${name} left the room`);
 });
 
 socket.on('room-closed', ({ reason }) => {
@@ -609,30 +741,25 @@ socket.on('room-closed', ({ reason }) => {
 // Ultra-Low Latency (<50ms) Dual-Clock Engine
 // =============================================
 
-// Host broadcasts audio position every 1.5s while playing
 function startHostBroadcast() {
   if (hostBroadcastTimer) clearInterval(hostBroadcastTimer);
   hostBroadcastTimer = setInterval(() => {
     if (!isHost || !currentTrack || !ytPlayer || !ytReady) return;
     try {
       const pState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-      if (pState === 1) { // 1 = PLAYING
-        const curTime = ytPlayer.getCurrentTime() || 0;
-        socket.emit('host-time-sync', { currentTime: curTime });
+      if (pState === 1) {
+        socket.emit('host-time-sync', { currentTime: ytPlayer.getCurrentTime() || 0 });
       }
     } catch (e) {}
   }, 1500);
 }
 
-// Guest heartbeat sync fallback (every 2000ms)
 function startGuestSync() {
   if (syncInterval) clearInterval(syncInterval);
   syncInterval = setInterval(() => {
     if (isHost || !currentTrack || !ytPlayer || !ytReady || isSeeking) return;
-
     socket.emit('sync-request', (state) => {
       if (!state || isHost) return;
-
       if (state.isPlaying) {
         syncGuestToTime(state.currentTime, state.serverTime);
       } else {
@@ -646,22 +773,18 @@ function startGuestSync() {
   }, 2000);
 }
 
-// Master drift correction algorithm: NEVER buffer in micro-drift zone!
 function syncGuestToTime(masterTime, masterServerTime) {
   if (!ytPlayer || !ytReady || isSeeking) return;
-
   try {
     const pState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-    // If currently buffering (state 3), do not interrupt network fetch
     if (pState === 3) return;
 
     const latencySec = Math.max(0, (getServerTime() - masterServerTime) / 1000);
     const targetPos = masterTime + latencySec;
     const myPos = ytPlayer.getCurrentTime() || 0;
-    const drift = myPos - targetPos; // negative = guest behind; positive = guest ahead
+    const drift = myPos - targetPos;
     const offsetMs = Math.round(Math.abs(drift) * 1000);
 
-    // If master is playing but guest is stopped, start playback
     if (pState !== 1 && pState !== 3) {
       ytPlayer.playVideo();
       updatePlayButton(true);
@@ -669,64 +792,37 @@ function syncGuestToTime(masterTime, masterServerTime) {
 
     const now = Date.now();
 
-    // Zone 1: ULTRA-LOCKSTEP (< 60ms)
-    // Imperceptible to human ears across devices. Perfectly in sync!
     if (offsetMs < 60) {
       if (currentPlaybackRate !== 1.0) {
-        try {
-          ytPlayer.setPlaybackRate(1.0);
-          currentPlaybackRate = 1.0;
-        } catch (e) {}
+        try { ytPlayer.setPlaybackRate(1.0); currentPlaybackRate = 1.0; } catch (e) {}
       }
-      updateSyncStatus(`In Sync • < 20ms offset`, 'synced');
+      updateSyncStatus('In Sync • < 20ms offset', 'synced');
       return;
     }
 
-    // Zone 2: SMOOTH MICRO-PITCH DRIFT (60ms to 900ms)
-    // CRITICAL: NEVER call seekTo() here! SeekTo causes mobile to stall, re-buffer,
-    // and spiral into runaway ms delay. Instead, adjust playback rate by +25% / -25%!
     if (offsetMs <= 900) {
       if (drift < 0) {
-        // Guest is slightly behind: speed up to glide smoothly into sync
         if (currentPlaybackRate !== 1.25) {
-          try {
-            ytPlayer.setPlaybackRate(1.25);
-            currentPlaybackRate = 1.25;
-          } catch (e) {}
+          try { ytPlayer.setPlaybackRate(1.25); currentPlaybackRate = 1.25; } catch (e) {}
         }
       } else {
-        // Guest is slightly ahead: slow down to let master catch up
         if (currentPlaybackRate !== 0.75) {
-          try {
-            ytPlayer.setPlaybackRate(0.75);
-            currentPlaybackRate = 0.75;
-          } catch (e) {}
+          try { ytPlayer.setPlaybackRate(0.75); currentPlaybackRate = 0.75; } catch (e) {}
         }
       }
       updateSyncStatus(`In Sync • ${Math.min(offsetMs, 45)}ms offset`, 'synced');
       return;
     }
 
-    // Zone 3: HARD DESYNC (> 900ms)
-    // Only triggered if user paused background tab for seconds or initial track load.
-    // Strictly debounced to once every 5 seconds to eliminate runaway seek loops.
     if (now - lastHardSeekTimestamp > 5000) {
       lastHardSeekTimestamp = now;
-      console.log(`[SyncTune] Re-anchoring timeline: offset was ${offsetMs}ms. Target: ${targetPos.toFixed(2)}s`);
-
-      // Add 250ms lead time to absorb mobile audio decoder spin-up
       ytPlayer.seekTo(targetPos + 0.25, true);
       if (currentPlaybackRate !== 1.0) {
-        try {
-          ytPlayer.setPlaybackRate(1.0);
-          currentPlaybackRate = 1.0;
-        } catch (e) {}
+        try { ytPlayer.setPlaybackRate(1.0); currentPlaybackRate = 1.0; } catch (e) {}
       }
-      updateSyncStatus(`In Sync • < 50ms offset`, 'synced');
+      updateSyncStatus('In Sync • < 50ms offset', 'synced');
     }
-  } catch (err) {
-    console.warn('[Sync Drift Error]', err);
-  }
+  } catch (err) {}
 }
 
 // =============================================
@@ -738,7 +834,6 @@ document.querySelectorAll('.reaction-btn').forEach(btn => {
     const emoji = btn.dataset.emoji;
     socket.emit('reaction', emoji);
     spawnFloatingEmoji(emoji);
-
     btn.style.transform = 'scale(1.3)';
     setTimeout(() => btn.style.transform = '', 180);
   });
@@ -760,6 +855,36 @@ function spawnFloatingEmoji(emoji) {
 }
 
 // =============================================
+// 3D Floating Music Notes Animation
+// =============================================
+
+const NOTE_SYMBOLS = ['♪', '♫', '♬', '🎵', '🎶', '🎧'];
+
+function spawnMusicNote() {
+  const container = document.getElementById('floating-notes-3d');
+  if (!container) return;
+  for (let i = 0; i < 3; i++) {
+    setTimeout(() => {
+      const note = document.createElement('div');
+      note.className = 'music-note-3d';
+      note.textContent = NOTE_SYMBOLS[Math.floor(Math.random() * NOTE_SYMBOLS.length)];
+      note.style.left = (10 + Math.random() * 80) + '%';
+      note.style.animationDelay = (Math.random() * 0.5) + 's';
+      note.style.fontSize = (16 + Math.random() * 20) + 'px';
+      container.appendChild(note);
+      note.addEventListener('animationend', () => note.remove());
+    }, i * 200);
+  }
+}
+
+// Periodically spawn notes while playing
+setInterval(() => {
+  if (ytPlayer && ytReady && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === 1) {
+    if (Math.random() < 0.3) spawnMusicNote();
+  }
+}, 4000);
+
+// =============================================
 // Mobile Prompt & Helpers
 // =============================================
 
@@ -777,14 +902,10 @@ const syncBtn = document.getElementById('sync-prompt-btn');
 if (syncBtn) {
   syncBtn.addEventListener('click', () => {
     unlockBackgroundAudio();
-    if (ytPlayer && ytReady) {
-      ytPlayer.playVideo();
-    }
+    if (ytPlayer && ytReady) ytPlayer.playVideo();
     if (!isHost && socket.connected) {
       socket.emit('sync-request', (state) => {
-        if (state && ytPlayer && ytReady && state.isPlaying) {
-          syncGuestToTime(state.currentTime, state.serverTime);
-        }
+        if (state && ytPlayer && ytReady && state.isPlaying) syncGuestToTime(state.currentTime, state.serverTime);
       });
     }
   });
@@ -801,16 +922,11 @@ document.getElementById('copy-room-code').addEventListener('click', () => {
 function extractVideoId(url) {
   if (!url) return null;
   const trimmed = url.trim();
-
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
   const patterns = [
     /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/|music\.youtube\.com\/watch\?(?:.*&)?v=)([a-zA-Z0-9_-]{11})/,
     /[?&]v=([a-zA-Z0-9_-]{11})/
   ];
-
   for (const p of patterns) {
     const m = trimmed.match(p);
     if (m && m[1]) return m[1];
@@ -829,7 +945,6 @@ function updateSyncStatus(text, status) {
   document.getElementById('sync-text').textContent = text;
   const dot = document.getElementById('sync-dot-footer');
   dot.className = 'sync-dot-footer ' + status;
-
   const badge = document.getElementById('sync-badge');
   if (badge) {
     const dotMini = badge.querySelector('.sync-dot-mini');
@@ -858,15 +973,13 @@ function showToast(message, type = 'success') {
   }, 3500);
 }
 
-// Re-synchronize instantly when device is unlocked or tab becomes active
+// Re-synchronize on visibility change
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     syncClock(3);
     if (!isHost && socket.connected) {
       socket.emit('sync-request', (state) => {
-        if (state && ytPlayer && ytReady && state.isPlaying) {
-          syncGuestToTime(state.currentTime, state.serverTime);
-        }
+        if (state && ytPlayer && ytReady && state.isPlaying) syncGuestToTime(state.currentTime, state.serverTime);
       });
     }
   }
@@ -875,9 +988,84 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', () => {
   if (!isHost && socket.connected) {
     socket.emit('sync-request', (state) => {
-      if (state && ytPlayer && ytReady && state.isPlaying) {
-        syncGuestToTime(state.currentTime, state.serverTime);
-      }
+      if (state && ytPlayer && ytReady && state.isPlaying) syncGuestToTime(state.currentTime, state.serverTime);
     });
   }
 });
+
+// =============================================
+// 3D Particles Background (Room)
+// =============================================
+const canvas = document.getElementById('particles-bg');
+if (canvas) {
+  const ctx = canvas.getContext('2d');
+  let particles = [];
+  const PARTICLE_COUNT = 30;
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  class Particle {
+    constructor() { this.reset(); }
+    reset() {
+      this.x = Math.random() * canvas.width;
+      this.y = Math.random() * canvas.height;
+      this.z = Math.random() * 3 + 0.5;
+      this.radius = (Math.random() * 2 + 0.5) / this.z;
+      this.vx = (Math.random() - 0.5) * 0.3;
+      this.vy = (Math.random() - 0.5) * 0.3;
+      this.alpha = (Math.random() * 0.3 + 0.05) / this.z;
+      const colors = ['139,92,246', '6,182,212', '236,72,153'];
+      this.color = colors[Math.floor(Math.random() * colors.length)];
+      this.pulseSpeed = Math.random() * 0.015 + 0.003;
+      this.pulseOffset = Math.random() * Math.PI * 2;
+    }
+    update(t) {
+      this.x += this.vx;
+      this.y += this.vy;
+      if (this.x < -10 || this.x > canvas.width + 10 || this.y < -10 || this.y > canvas.height + 10) this.reset();
+      this.currentAlpha = this.alpha * (0.5 + 0.5 * Math.sin(t * this.pulseSpeed + this.pulseOffset));
+    }
+    draw() {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${this.color},${this.currentAlpha})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius * 3, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${this.color},${this.currentAlpha * 0.12})`;
+      ctx.fill();
+    }
+  }
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
+
+  let t = 0;
+  function animate() {
+    t++;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles.forEach(p => { p.update(t); p.draw(); });
+    // Connection lines
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 120) {
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.strokeStyle = `rgba(139,92,246,${(1 - dist / 120) * 0.06})`;
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+}

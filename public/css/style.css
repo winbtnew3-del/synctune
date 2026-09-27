@@ -1,5 +1,5 @@
 /* =============================================
-   SyncTune — Global Styles
+   SyncTune — Premium Styles with 3D Animations
    ============================================= */
 
 *, *::before, *::after {
@@ -27,6 +27,7 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --radius: 16px;
   --radius-sm: 12px;
+  --gold: #fbbf24;
 }
 
 html {
@@ -51,6 +52,20 @@ button { font-family: var(--font); cursor: pointer; }
 img { display: block; max-width: 100%; }
 
 /* =============================================
+   3D Particles Canvas
+   ============================================= */
+
+#particles-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* =============================================
    Layout
    ============================================= */
 
@@ -59,6 +74,8 @@ img { display: block; max-width: 100%; }
   margin: 0 auto;
   padding: 12px 16px;
   min-height: 100vh;
+  position: relative;
+  z-index: 1;
 }
 
 /* =============================================
@@ -95,6 +112,22 @@ header, .room-header {
   background-clip: text;
 }
 
+.premium-badge {
+  font-size: 9px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--gold), #f59e0b);
+  color: #000;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+  animation: badge-glow 3s ease-in-out infinite;
+}
+
+@keyframes badge-glow {
+  0%, 100% { box-shadow: 0 0 6px rgba(251, 191, 36, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(251, 191, 36, 0.6); }
+}
+
 nav {
   display: flex;
   gap: 16px;
@@ -111,7 +144,7 @@ nav a:hover, .nav-link:hover {
 }
 
 /* =============================================
-   Hero (Home)
+   Hero (Home) — 3D Spinning Disc
    ============================================= */
 
 .hero {
@@ -130,12 +163,73 @@ nav a:hover, .nav-link:hover {
   background-clip: text;
 }
 
-.hero p {
+.hero-subtitle {
   color: var(--text-2);
   font-size: 15px;
 }
 
-/* Hero waveform */
+/* 3D Disc Hero Animation */
+.hero-3d-disc {
+  width: 100px;
+  height: 100px;
+  margin: 0 auto 20px;
+  position: relative;
+  perspective: 600px;
+  animation: disc-float 4s ease-in-out infinite;
+}
+
+@keyframes disc-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.disc-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid;
+  animation: disc-spin 6s linear infinite;
+}
+
+.ring-1 {
+  inset: 0;
+  border-color: rgba(139, 92, 246, 0.4);
+  animation-duration: 6s;
+}
+
+.ring-2 {
+  inset: 12px;
+  border-color: rgba(6, 182, 212, 0.4);
+  animation-duration: 4s;
+  animation-direction: reverse;
+}
+
+.ring-3 {
+  inset: 24px;
+  border-color: rgba(236, 72, 153, 0.3);
+  animation-duration: 8s;
+}
+
+.disc-center {
+  position: absolute;
+  inset: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  animation: disc-pulse 2s ease-in-out infinite;
+}
+
+@keyframes disc-spin {
+  from { transform: rotateX(60deg) rotateZ(0deg); }
+  to { transform: rotateX(60deg) rotateZ(360deg); }
+}
+
+@keyframes disc-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+/* Legacy hero waveform (kept for backwards compat) */
 .hero-waveform {
   display: flex;
   align-items: center;
@@ -295,14 +389,8 @@ nav a:hover, .nav-link:hover {
   margin-top: 4px;
 }
 
-.btn:active {
-  transform: scale(0.98);
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .btn-primary {
   background: linear-gradient(135deg, var(--purple), var(--purple-dark));
@@ -347,11 +435,7 @@ nav a:hover, .nav-link:hover {
   border: 1px solid rgba(100, 116, 139, 0.18);
   border-radius: var(--radius-sm);
   color: var(--text-1);
-  font-family: 'Courier New', monospace;
-  font-size: 20px;
-  letter-spacing: 6px;
-  text-align: center;
-  text-transform: uppercase;
+  font-size: 15px;
   outline: none;
   transition: border-color 0.3s;
 }
@@ -363,7 +447,24 @@ nav a:hover, .nav-link:hover {
 .input-group input::placeholder {
   color: var(--text-3);
   font-size: 14px;
-  letter-spacing: 3px;
+}
+
+/* Name input styling */
+.name-input {
+  font-family: var(--font) !important;
+  font-size: 15px !important;
+  letter-spacing: 0 !important;
+  text-align: left !important;
+  text-transform: none !important;
+}
+
+/* Code input keeps monospace */
+#room-code-input {
+  font-family: 'Courier New', monospace;
+  font-size: 20px;
+  letter-spacing: 6px;
+  text-align: center;
+  text-transform: uppercase;
 }
 
 /* =============================================
@@ -389,7 +490,7 @@ nav a:hover, .nav-link:hover {
 
 .toast {
   position: fixed;
-  bottom: 28px;
+  bottom: 72px;
   left: 50%;
   transform: translateX(-50%) translateY(20px);
   padding: 12px 22px;
@@ -457,6 +558,26 @@ nav a:hover, .nav-link:hover {
 }
 .copy-btn-small:hover { color: var(--text-1); }
 
+/* Members Toggle Button */
+.members-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(236, 72, 153, 0.08);
+  border: 1px solid rgba(236, 72, 153, 0.18);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--pink);
+  transition: all 0.2s;
+}
+
+.members-toggle-btn:hover {
+  background: rgba(236, 72, 153, 0.15);
+  border-color: rgba(236, 72, 153, 0.3);
+}
+
 /* ---- Role Badge ---- */
 .role-badge {
   display: inline-flex;
@@ -479,6 +600,35 @@ nav a:hover, .nav-link:hover {
   background: rgba(6, 182, 212, 0.1);
   border: 1px solid rgba(6, 182, 212, 0.2);
   color: var(--cyan);
+}
+
+.role-name {
+  color: var(--text-2);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* ---- Track Changed Banner ---- */
+.track-changed-banner {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(6, 182, 212, 0.1));
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  text-align: center;
+  overflow: hidden;
+}
+
+.track-changed-banner.banner-animate {
+  animation: banner-slide-in 0.4s ease-out;
+}
+
+@keyframes banner-slide-in {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ---- Track Input ---- */
@@ -524,11 +674,58 @@ nav a:hover, .nav-link:hover {
   color: var(--text-3);
 }
 
-/* ---- Empty State ---- */
+/* ---- Empty State with 3D Vinyl ---- */
 .empty-state {
   text-align: center;
   padding: 48px 20px;
   color: var(--text-2);
+}
+
+.empty-icon-3d {
+  margin-bottom: 20px;
+  perspective: 400px;
+}
+
+.vinyl-3d {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1a1a3e, #2d1b69);
+  position: relative;
+  animation: vinyl-spin-3d 4s linear infinite;
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.2);
+}
+
+.vinyl-groove {
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(139, 92, 246, 0.15);
+}
+
+.vinyl-groove::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(6, 182, 212, 0.1);
+}
+
+.vinyl-label {
+  position: absolute;
+  inset: 25px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--purple), var(--pink));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+@keyframes vinyl-spin-3d {
+  from { transform: rotateX(25deg) rotateZ(0deg); }
+  to { transform: rotateX(25deg) rotateZ(360deg); }
 }
 
 .empty-icon {
@@ -564,7 +761,7 @@ nav a:hover, .nav-link:hover {
 .track-artwork {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 1;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: rgba(8, 8, 24, 0.8);
@@ -581,6 +778,47 @@ nav a:hover, .nav-link:hover {
   position: absolute;
   inset: 0;
   background: linear-gradient(to top, rgba(10, 10, 26, 0.7) 0%, transparent 50%);
+}
+
+/* 3D Spinning Disc on Artwork */
+.spinning-disc-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60px;
+  height: 60px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(139, 92, 246, 0.4);
+  opacity: 0;
+  transition: opacity 0.5s;
+  pointer-events: none;
+}
+
+.spinning-disc-overlay.spinning {
+  opacity: 1;
+  animation: artwork-disc-spin 3s linear infinite;
+}
+
+.disc-inner-ring {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(6, 182, 212, 0.3);
+}
+
+.disc-inner-ring::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.15);
+  border-radius: 50%;
+}
+
+@keyframes artwork-disc-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
 /* Sync badge on artwork */
@@ -673,6 +911,13 @@ nav a:hover, .nav-link:hover {
 .track-info p {
   color: var(--text-2);
   font-size: 13px;
+}
+
+.track-added-by {
+  color: var(--purple) !important;
+  font-size: 12px !important;
+  font-style: italic;
+  margin-top: 4px;
 }
 
 /* Mini info bar */
@@ -778,7 +1023,7 @@ nav a:hover, .nav-link:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 20px;
+  gap: 16px;
 }
 
 .ctrl-btn {
@@ -827,6 +1072,259 @@ nav a:hover, .nav-link:hover {
 }
 
 .ctrl-play svg { pointer-events: none; }
+
+/* =============================================
+   Queue Section (Spotify-like)
+   ============================================= */
+
+.queue-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 20px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.queue-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.queue-icon {
+  font-size: 16px;
+}
+
+.queue-count {
+  font-size: 12px;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.queue-toggle-view {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.2s;
+}
+.queue-toggle-view:hover { color: var(--text-1); }
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  transition: max-height 0.3s ease;
+}
+
+.queue-list.queue-collapsed {
+  max-height: 0;
+  overflow: hidden;
+}
+
+.queue-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+}
+
+.queue-item:hover {
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.queue-item-active {
+  background: rgba(139, 92, 246, 0.12) !important;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.queue-item-past {
+  opacity: 0.45;
+}
+
+.queue-item-number {
+  width: 24px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.queue-item-active .queue-item-number {
+  color: var(--purple);
+  font-size: 14px;
+}
+
+.queue-item-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.queue-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-artist {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-remove {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.queue-item:hover .queue-item-remove {
+  opacity: 1;
+}
+
+.queue-item-remove:hover {
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* =============================================
+   Members Panel
+   ============================================= */
+
+.members-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 20px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  animation: panel-slide-in 0.3s ease-out;
+}
+
+@keyframes panel-slide-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.members-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.members-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.members-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 16px;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 0.2s;
+}
+.members-close-btn:hover { color: var(--text-1); }
+
+.members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s;
+}
+
+.member-item:hover {
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.member-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--purple), var(--cyan));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.member-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.member-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.member-role {
+  font-size: 11px;
+  color: var(--text-3);
+}
 
 /* ---- Reactions ---- */
 .reactions-section {
@@ -905,6 +1403,41 @@ nav a:hover, .nav-link:hover {
   100% { opacity: 0; transform: translateY(-320px) scale(1.4) rotate(15deg); }
 }
 
+/* =============================================
+   3D Floating Music Notes
+   ============================================= */
+
+.floating-notes-3d {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8000;
+  overflow: hidden;
+}
+
+.music-note-3d {
+  position: absolute;
+  bottom: 100px;
+  animation: note-float-3d 3s ease-out forwards;
+  filter: drop-shadow(0 4px 12px rgba(139, 92, 246, 0.4));
+  opacity: 0.7;
+}
+
+@keyframes note-float-3d {
+  0% {
+    opacity: 0.7;
+    transform: translateY(0) translateZ(0) rotateX(0) scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: translateY(-200px) translateZ(50px) rotateX(180deg) scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-400px) translateZ(100px) rotateX(360deg) scale(0.6);
+  }
+}
+
 /* ---- Sync Footer ---- */
 .sync-footer {
   position: fixed;
@@ -974,11 +1507,16 @@ nav a:hover, .nav-link:hover {
     padding: 14px 16px;
   }
 
-  .controls-row { gap: 14px; }
+  .controls-row { gap: 12px; }
 
   .ctrl-play {
     width: 52px;
     height: 52px;
+  }
+
+  .queue-item-thumb {
+    width: 32px;
+    height: 32px;
   }
 }
 

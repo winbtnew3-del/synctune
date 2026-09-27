@@ -10,6 +10,9 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 </head>
 <body>
+  <!-- 3D Floating Particles Background -->
+  <canvas id="particles-bg"></canvas>
+
   <div class="container">
     <!-- Header -->
     <header>
@@ -27,6 +30,7 @@
           </defs>
         </svg>
         <span class="logo-text">SyncTune</span>
+        <span class="premium-badge">PRO</span>
       </div>
       <nav>
         <a href="/">Home</a>
@@ -36,13 +40,14 @@
 
     <!-- Hero -->
     <section class="hero">
-      <div class="hero-waveform">
-        <span></span><span></span><span></span><span></span><span></span>
-        <span></span><span></span><span></span><span></span><span></span>
-        <span></span><span></span><span></span><span></span><span></span>
+      <div class="hero-3d-disc">
+        <div class="disc-ring ring-1"></div>
+        <div class="disc-ring ring-2"></div>
+        <div class="disc-ring ring-3"></div>
+        <div class="disc-center">🎵</div>
       </div>
       <h1>Listen Together</h1>
-      <p>Share music with friends in perfect sync</p>
+      <p class="hero-subtitle">Share music with friends in perfect sync — Spotify-style queue</p>
     </section>
 
     <!-- Create a Room -->
@@ -51,12 +56,17 @@
         <span class="card-icon">+</span>
         <div>
           <h2>Create a Room</h2>
-          <p>Get a unique 6-character code and share it with one friend.</p>
+          <p>Get a unique 6-character code and share it with friends.</p>
         </div>
       </div>
 
+      <div class="input-group">
+        <label for="host-name-input">YOUR NAME</label>
+        <input type="text" id="host-name-input" placeholder="Enter your name" maxlength="20" autocomplete="off" spellcheck="false" class="name-input">
+      </div>
+
       <div id="room-code-display" class="room-code hidden">
-        <p class="code-label">Share this code with your friend:</p>
+        <p class="code-label">Share this code with your friends:</p>
         <div class="code-box">
           <span id="generated-code">------</span>
           <button id="copy-code" class="copy-btn" title="Copy code">
@@ -82,6 +92,10 @@
         </div>
       </div>
       <div class="input-group">
+        <label for="guest-name-input">YOUR NAME</label>
+        <input type="text" id="guest-name-input" placeholder="Enter your name" maxlength="20" autocomplete="off" spellcheck="false" class="name-input">
+      </div>
+      <div class="input-group">
         <label for="room-code-input">ROOM CODE</label>
         <input type="text" id="room-code-input" placeholder="E.G. X7K9PQ" maxlength="6" autocomplete="off" spellcheck="false">
       </div>
@@ -90,7 +104,7 @@
 
     <!-- Footer -->
     <footer class="home-footer">
-      <p>Paste a YouTube link • Listen in sync • React together</p>
+      <p>Paste YouTube links • Build a playlist queue • Listen in sync</p>
     </footer>
   </div>
 

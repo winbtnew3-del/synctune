@@ -21,7 +21,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // =============================================
 const rooms = new Map();
 const infoCache = new Map();
-const CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hrs
+const CACHE_TTL = 2 * 60 * 60 * 1000;
 
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -35,16 +35,11 @@ function generateRoomCode() {
 function extractVideoId(url) {
   if (!url) return null;
   const trimmed = url.trim();
-
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
   const patterns = [
     /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/|music\.youtube\.com\/watch\?(?:.*&)?v=)([a-zA-Z0-9_-]{11})/,
     /[?&]v=([a-zA-Z0-9_-]{11})/
   ];
-
   for (const p of patterns) {
     const m = trimmed.match(p);
     if (m && m[1]) return m[1];
@@ -52,7 +47,6 @@ function extractVideoId(url) {
   return null;
 }
 
-// Fetch fast metadata via YouTube oEmbed
 function fetchOEmbed(videoId) {
   return new Promise((resolve) => {
     const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
@@ -89,21 +83,25 @@ function fetchOEmbed(videoId) {
   });
 }
 
+// Helper: get member list with names
+function getMemberList(room) {
+  const list = [];
+  for (const [sid, m] of room.members) {
+    list.push({ id: sid, name: m.name || 'Anonymous', role: m.role });
+  }
+  return list;
+}
+
 // =============================================
 // REST Endpoints
 // =============================================
 
-// Video Info
 app.get('/api/info/:videoId', async (req, res) => {
   const videoId = extractVideoId(req.params.videoId);
-  if (!videoId) {
-    return res.status(400).json({ error: 'Invalid YouTube link.' });
-  }
+  if (!videoId) return res.status(400).json({ error: 'Invalid YouTube link.' });
 
   const cached = infoCache.get(videoId);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    return res.json(cached.data);
-  }
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return res.json(cached.data);
 
   try {
     const data = await fetchOEmbed(videoId);
@@ -119,12 +117,10 @@ app.get('/api/info/:videoId', async (req, res) => {
   }
 });
 
-// Room page
 app.get('/room', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
 });
 
-// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', rooms: rooms.size });
 });
@@ -144,6 +140,7 @@ io.on('connection', (socket) => {
   socket.on('create-room', (data, callback) => {
     if (typeof data === 'function') { callback = data; data = {}; }
     const code = (data?.code || '').toUpperCase() || generateRoomCode();
+    const userName = (data?.name || 'Host').substring(0, 20);
 
     if (rooms.has(code)) {
       const existing = rooms.get(code);
@@ -151,12 +148,16 @@ io.on('connection', (socket) => {
         clearTimeout(existing.hostDisconnectTimer);
         existing.hostDisconnectTimer = null;
         existing.hostId = socket.id;
-        existing.members.set(socket.id, { role: 'host', joinedAt: Date.now() });
+        existing.members.set(socket.id, { role: 'host', name: userName, joinedAt: Date.now() });
         socket.join(code);
         socket.roomCode = code;
         socket.role = 'host';
+        socket.userName = userName;
 
-        io.to(code).emit('member-update', { memberCount: existing.members.size });
+        io.to(code).emit('member-update', {
+          memberCount: existing.members.size,
+          members: getMemberList(existing)
+        });
         return callback({ success: true, code, role: 'host' });
       }
       return callback({ success: false, error: 'Room code already in use' });
@@ -165,7 +166,9 @@ io.on('connection', (socket) => {
     const room = {
       code,
       hostId: socket.id,
-      members: new Map([[socket.id, { role: 'host', joinedAt: Date.now() }]]),
+      members: new Map([[socket.id, { role: 'host', name: userName, joinedAt: Date.now() }]]),
+      queue: [],          // Spotify-like queue
+      queueIndex: -1,     // Currently playing index
       currentTrack: null,
       isPlaying: false,
       currentTime: 0,
@@ -177,6 +180,7 @@ io.on('connection', (socket) => {
     socket.join(code);
     socket.roomCode = code;
     socket.role = 'host';
+    socket.userName = userName;
 
     callback({ success: true, code, role: 'host' });
   });
@@ -184,26 +188,30 @@ io.on('connection', (socket) => {
   // ---------- Join Room ----------
   socket.on('join-room', (data, callback) => {
     const code = (data?.code || '').toUpperCase().trim();
+    const userName = (data?.name || 'Listener').substring(0, 20);
     const room = rooms.get(code);
 
-    if (!room) {
-      return callback({ success: false, error: 'Room not found. Check the code.' });
-    }
-    if (room.members.size >= 30) {
-      return callback({ success: false, error: 'Room is full (max 30).' });
-    }
+    if (!room) return callback({ success: false, error: 'Room not found. Check the code.' });
+    if (room.members.size >= 30) return callback({ success: false, error: 'Room is full (max 30).' });
 
-    room.members.set(socket.id, { role: 'guest', joinedAt: Date.now() });
+    room.members.set(socket.id, { role: 'guest', name: userName, joinedAt: Date.now() });
     socket.join(code);
     socket.roomCode = code;
     socket.role = 'guest';
+    socket.userName = userName;
 
     let currentTime = room.currentTime;
     if (room.isPlaying) {
       currentTime += Math.max(0, (Date.now() - room.lastUpdate) / 1000);
     }
 
-    io.to(code).emit('member-update', { memberCount: room.members.size });
+    io.to(code).emit('member-update', {
+      memberCount: room.members.size,
+      members: getMemberList(room)
+    });
+
+    // Send notification to room that someone joined
+    socket.to(code).emit('user-joined', { name: userName });
 
     callback({
       success: true,
@@ -214,12 +222,154 @@ io.on('connection', (socket) => {
         isPlaying: room.isPlaying,
         currentTime,
         serverTime: Date.now(),
-        memberCount: room.members.size
+        memberCount: room.members.size,
+        members: getMemberList(room),
+        queue: room.queue,
+        queueIndex: room.queueIndex
       }
     });
   });
 
-  // ---------- Track Change ----------
+  // ---------- Add to Queue ----------
+  socket.on('queue-add', (trackData, callback) => {
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+
+    const queueItem = {
+      ...trackData,
+      addedBy: socket.userName || 'Anonymous',
+      addedAt: Date.now(),
+      id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+    };
+
+    room.queue.push(queueItem);
+
+    // Broadcast updated queue to all
+    io.to(socket.roomCode).emit('queue-updated', {
+      queue: room.queue,
+      queueIndex: room.queueIndex,
+      addedBy: socket.userName,
+      addedTrack: queueItem.title
+    });
+
+    // If nothing is playing, auto-play this track
+    if (!room.currentTrack) {
+      room.queueIndex = 0;
+      room.currentTrack = queueItem;
+      room.isPlaying = true;
+      room.currentTime = 0;
+      room.lastUpdate = Date.now();
+
+      io.to(socket.roomCode).emit('track-changed', {
+        track: queueItem,
+        currentTime: 0,
+        isPlaying: true,
+        serverTime: Date.now(),
+        changedBy: socket.userName,
+        queueIndex: 0
+      });
+    }
+
+    if (typeof callback === 'function') callback({ success: true, queueLength: room.queue.length });
+  });
+
+  // ---------- Remove from Queue ----------
+  socket.on('queue-remove', (itemId) => {
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+
+    const idx = room.queue.findIndex(q => q.id === itemId);
+    if (idx === -1) return;
+
+    // Don't remove currently playing track
+    if (idx === room.queueIndex) return;
+
+    room.queue.splice(idx, 1);
+    if (idx < room.queueIndex) room.queueIndex--;
+
+    io.to(socket.roomCode).emit('queue-updated', {
+      queue: room.queue,
+      queueIndex: room.queueIndex
+    });
+  });
+
+  // ---------- Skip to Next Track ----------
+  socket.on('queue-next', () => {
+    const room = rooms.get(socket.roomCode);
+    if (!room || room.queue.length === 0) return;
+
+    const nextIdx = room.queueIndex + 1;
+    if (nextIdx >= room.queue.length) {
+      // End of queue
+      room.isPlaying = false;
+      room.currentTime = 0;
+      io.to(socket.roomCode).emit('queue-ended');
+      return;
+    }
+
+    room.queueIndex = nextIdx;
+    room.currentTrack = room.queue[nextIdx];
+    room.isPlaying = true;
+    room.currentTime = 0;
+    room.lastUpdate = Date.now();
+
+    io.to(socket.roomCode).emit('track-changed', {
+      track: room.queue[nextIdx],
+      currentTime: 0,
+      isPlaying: true,
+      serverTime: Date.now(),
+      changedBy: socket.userName || 'System',
+      queueIndex: nextIdx
+    });
+  });
+
+  // ---------- Skip to Previous Track ----------
+  socket.on('queue-prev', () => {
+    const room = rooms.get(socket.roomCode);
+    if (!room || room.queue.length === 0) return;
+
+    const prevIdx = Math.max(0, room.queueIndex - 1);
+    room.queueIndex = prevIdx;
+    room.currentTrack = room.queue[prevIdx];
+    room.isPlaying = true;
+    room.currentTime = 0;
+    room.lastUpdate = Date.now();
+
+    io.to(socket.roomCode).emit('track-changed', {
+      track: room.queue[prevIdx],
+      currentTime: 0,
+      isPlaying: true,
+      serverTime: Date.now(),
+      changedBy: socket.userName || 'System',
+      queueIndex: prevIdx
+    });
+  });
+
+  // ---------- Play specific queue item ----------
+  socket.on('queue-play', (itemId) => {
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+
+    const idx = room.queue.findIndex(q => q.id === itemId);
+    if (idx === -1) return;
+
+    room.queueIndex = idx;
+    room.currentTrack = room.queue[idx];
+    room.isPlaying = true;
+    room.currentTime = 0;
+    room.lastUpdate = Date.now();
+
+    io.to(socket.roomCode).emit('track-changed', {
+      track: room.queue[idx],
+      currentTime: 0,
+      isPlaying: true,
+      serverTime: Date.now(),
+      changedBy: socket.userName || 'Anonymous',
+      queueIndex: idx
+    });
+  });
+
+  // ---------- Track Change (legacy / direct) ----------
   socket.on('change-track', (trackData) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
@@ -234,7 +384,8 @@ io.on('connection', (socket) => {
       track: trackData,
       currentTime: 0,
       isPlaying: true,
-      serverTime: now
+      serverTime: now,
+      changedBy: socket.userName || 'Anonymous'
     });
   });
 
@@ -247,7 +398,6 @@ io.on('connection', (socket) => {
     room.currentTime = currentTime;
     room.lastUpdate = now;
 
-    // Send host's exact audio time to all guests
     socket.to(socket.roomCode).emit('time-sync-update', {
       currentTime,
       serverTime: now
@@ -288,6 +438,34 @@ io.on('connection', (socket) => {
     });
   });
 
+  // ---------- Track Ended (auto-next) ----------
+  socket.on('track-ended', () => {
+    const room = rooms.get(socket.roomCode);
+    if (!room || room.queue.length === 0) return;
+
+    const nextIdx = room.queueIndex + 1;
+    if (nextIdx >= room.queue.length) {
+      room.isPlaying = false;
+      io.to(socket.roomCode).emit('queue-ended');
+      return;
+    }
+
+    room.queueIndex = nextIdx;
+    room.currentTrack = room.queue[nextIdx];
+    room.isPlaying = true;
+    room.currentTime = 0;
+    room.lastUpdate = Date.now();
+
+    io.to(socket.roomCode).emit('track-changed', {
+      track: room.queue[nextIdx],
+      currentTime: 0,
+      isPlaying: true,
+      serverTime: Date.now(),
+      changedBy: 'Auto-Queue',
+      queueIndex: nextIdx
+    });
+  });
+
   // ---------- Heartbeat Query ----------
   socket.on('sync-request', (callback) => {
     const room = rooms.get(socket.roomCode);
@@ -314,6 +492,7 @@ io.on('connection', (socket) => {
     if (!room) return;
     io.to(socket.roomCode).emit('reaction', {
       emoji,
+      name: socket.userName || 'Someone',
       id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
     });
   });
@@ -324,6 +503,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
+    const userName = socket.userName || 'Someone';
     room.members.delete(socket.id);
 
     if (socket.id === room.hostId) {
@@ -332,7 +512,11 @@ io.on('connection', (socket) => {
         rooms.delete(socket.roomCode);
       }, 30000);
     } else {
-      io.to(socket.roomCode).emit('member-update', { memberCount: room.members.size });
+      io.to(socket.roomCode).emit('member-update', {
+        memberCount: room.members.size,
+        members: getMemberList(room)
+      });
+      io.to(socket.roomCode).emit('user-left', { name: userName });
     }
   });
 });
